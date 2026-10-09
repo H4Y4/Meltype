@@ -45,9 +45,9 @@ cd mac
 - 設定・学習データ・ユーザー辞書は `~/Library/Application Support/Meltype` (入力メニューの「Meltype のデータフォルダを開く」)。
   設定は Windows 版と同じ `config.json` です (自動判定の強さ `DetectionLevel` など)
 - 入力中の Ctrl キーを Mac の日本語入力と同じにするには、`config.json` に `"ControlKeys": "Mac"` と書きます (書かない・`"Atok"` なら、今までどおり Ctrl+U/I/O/P。ほかの設定と同じく、知らない名前を書くと config.json 全体が既定値に戻り、元のファイルは config.json.broken に残ります)。次に入力欄を選んだときから効きます。
-  Ctrl+J ひらがな / Ctrl+K カタカナ / Ctrl+L 全角英字 / Ctrl+; 半角カタカナ / Ctrl+: と Ctrl+' 半角英字 (US 配列の : は Shift+; なので、Shift の要らない Ctrl+' が使いやすい) /
-  Ctrl+N 次の候補 / Ctrl+P 前の候補 / Ctrl+B 次の文節 / Ctrl+F 前の文節 / Ctrl+W・Ctrl+O 文節を伸ばす / Ctrl+I 縮める。
-  Ctrl+B / Ctrl+F の向きは Apple のガイドの表のとおりで、実機では未確認です。入力が空のときの Ctrl+N などはアプリにそのまま渡します
+  Ctrl+J ひらがな / Ctrl+K カタカナ / Ctrl+L 全角英字 / Ctrl+; ・Ctrl+: ・Ctrl+' 半角英字 (macOS の既定の「ローマ字に変換」と同じ。US 配列の : は Shift+; になるので割り当てなし、Shift の要らない Ctrl+; か Ctrl+' を使います。英字に切り替える Ctrl+Shift+' (US)・Ctrl+Shift+; (JIS) も割り当てなし。半角カタカナは F8) /
+  Ctrl+N 次の候補 / Ctrl+P 前の候補 / Ctrl+F 次の文節 / Ctrl+B 前の文節 / Ctrl+W・Ctrl+O 文節を伸ばす / Ctrl+I 縮める / Ctrl+V 次のページ・Ctrl+R 前のページ (ページ送りは変換中だけ)。
+  英語と判定した語や F9 / F10 で英字にした後の Ctrl+N などは、確定してからアプリにそのまま渡します。入力が空のときの Ctrl+N などもアプリにそのまま渡します
 
 ## ユーザー辞書
 

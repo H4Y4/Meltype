@@ -152,19 +152,44 @@ struct EventTests {
    precondition(ctrl(controller,client,"\n","j",code:kVK_ANSI_J),"Ctrl+J must be consumed"); equal(client.marked,"あいうえお")
    equal(client.document,"")
   }
-  check("Mac style Ctrl+; half-width katakana") { controller,client in
+  check("Mac style Ctrl+; half-width alphanumerics (not katakana)") { controller,client in
    type(controller,client,"aiueo")
-   precondition(ctrl(controller,client,";",";",code:kVK_ANSI_Semicolon),"Ctrl+; must be consumed"); equal(client.marked,"ｱｲｳｴｵ")
+   precondition(ctrl(controller,client,";",";",code:kVK_ANSI_Semicolon),"Ctrl+; must be consumed"); equal(client.marked,"aiueo")
    equal(client.document,"")
   }
-  check("Mac style Ctrl+: and Ctrl+' half-width alphanumerics") { controller,client in
+  check("Mac style Ctrl+: (JIS) and Ctrl+' half-width alphanumerics") { controller,client in
    type(controller,client,"aiueo")
    _=ctrl(controller,client,"\n","j",code:kVK_ANSI_J)
-   // US 配列の Ctrl+: は Ctrl+Shift+; (characters は Shift を無視して ";" になる)
-   precondition(ctrl(controller,client,";",":",code:kVK_ANSI_Semicolon,shift:true),"Ctrl+: must be consumed"); equal(client.marked,"aiueo")
+   // JIS 配列の Ctrl+: は Quote のキー (0x27): characters は "'"、charactersIgnoringModifiers は ":"
+   precondition(ctrl(controller,client,"'",":",code:kVK_ANSI_Quote),"Ctrl+: (JIS) must be consumed"); equal(client.marked,"aiueo")
    _=ctrl(controller,client,"\n","j",code:kVK_ANSI_J); equal(client.marked,"あいうえお")
    precondition(ctrl(controller,client,"'","'",code:kVK_ANSI_Quote),"Ctrl+' must be consumed"); equal(client.marked,"aiueo")
    equal(client.document,"")
+  }
+  // 英字への切り替えのキー (US 配列の Ctrl+Shift+'、JIS 配列の Ctrl+Shift+;) は割り当てが無く、本体は使わない
+  // (英数への切り替えは OS 側の処理に回る)。characters は Shift を無視する。
+  check("Mac style Ctrl+Shift+' (US) is not consumed") { controller,client in
+   type(controller,client,"aiueo")
+   precondition(!ctrl(controller,client,"'","\"",code:kVK_ANSI_Quote,shift:true),"Ctrl+Shift+' (US) must pass")
+   equal(client.document,"あいうえお"); equal(client.marked,"")
+  }
+  check("Mac style Ctrl+Shift+; (JIS) is not consumed") { controller,client in
+   type(controller,client,"aiueo")
+   precondition(!ctrl(controller,client,";","+",code:kVK_ANSI_Semicolon,shift:true),"Ctrl+Shift+; (JIS) must pass")
+   equal(client.document,"あいうえお"); equal(client.marked,"")
+  }
+  check("Mac style Ctrl+Shift+; (US, Ctrl+:) is not consumed") { controller,client in
+   type(controller,client,"aiueo")
+   precondition(!ctrl(controller,client,";",":",code:kVK_ANSI_Semicolon,shift:true),"Ctrl+: (US) must pass")
+   equal(client.document,"あいうえお"); equal(client.marked,"")
+  }
+  check("Mac style Ctrl+N / Ctrl+F in an English word pass to the app") { controller,client in
+   type(controller,client,"hello")
+   precondition(!ctrl(controller,client,"\u{0E}","n",code:kVK_ANSI_N),"Ctrl+N must pass to the app")
+   equal(client.document,"hello"); equal(client.marked,"")
+   type(controller,client,"hello")
+   precondition(!ctrl(controller,client,"\u{06}","f",code:kVK_ANSI_F),"Ctrl+F must pass to the app")
+   equal(client.document,"hellohello"); equal(client.marked,"")
   }
   check("Mac style Ctrl+U is not assigned and Ctrl+N passes when empty") { controller,client in
    precondition(!ctrl(controller,client,"\u{0E}","n",code:kVK_ANSI_N),"Ctrl+N with no input must pass to the app")

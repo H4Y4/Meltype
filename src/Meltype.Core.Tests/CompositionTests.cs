@@ -764,20 +764,23 @@ internal static class CompositionTests
     [Test]
     public static void MacControl_Symbols_JisLayout()
     {
-        // JIS 配列: ; のキー (0xBB) は半角カタカナ、: のキー (0xBA) は半角英字、' は Shift+7
+        // JIS 配列: ; のキー (0xBB) と : のキー (0xBA) と ' (Shift+7) は、どれも半角英字 (ローマ字に変換)
         var k = new Keyboard { ControlKeys = Meltype.Config.ControlKeyStyle.Mac };
         k.Type("aiueo");
+        CtrlPress(k, 'K');
+        Assert.Equal("アイウエオ", k.Showing);
         CtrlPress(k, 0xBB);
-        Assert.Equal("ｱｲｳｴｵ", k.Showing, "Ctrl+; = 半角カタカナ");
+        Assert.Equal("aiueo", k.Showing, "Ctrl+; = 半角英字");
+        CtrlPress(k, 'J');
         CtrlPress(k, 0xBA);
         Assert.Equal("aiueo", k.Showing, "Ctrl+: = 半角英字");
         CtrlPress(k, 'J');
-        Assert.Equal("あいうえお", k.Showing);
         k.Host.PhysicalShift = true;
         CtrlPress(k, 0x37);
         k.Host.PhysicalShift = false;
         Assert.Equal("aiueo", k.Showing, "Ctrl+' = 半角英字");
         Assert.Equal(0, k.Host.Output.Count);
+        Assert.True(!k.Host.Events.Any(e => e.StartsWith("down:77")), "F8 (半角カタカナ) にはならない");
     }
 
     [Test]
@@ -787,11 +790,26 @@ internal static class CompositionTests
         var k = new Keyboard { ControlKeys = Meltype.Config.ControlKeyStyle.Mac };
         k.Host.Layout = new() { [(0xBA, false)] = ';', [(0xBA, true)] = ':', [(0xDE, false)] = '\'', [(0xDE, true)] = '"' };
         k.Type("aiueo");
+        CtrlPress(k, 'K');
         CtrlPress(k, 0xBA);
-        Assert.Equal("ｱｲｳｴｵ", k.Showing, "Ctrl+; = 半角カタカナ");
+        Assert.Equal("aiueo", k.Showing, "Ctrl+; = 半角英字");
+        CtrlPress(k, 'J');
         CtrlPress(k, 0xDE);
         Assert.Equal("aiueo", k.Showing, "Ctrl+' = 半角英字");
         CtrlPress(k, 'J');
+        CtrlPress(k, 0xDC);
+        Assert.Equal("あいうえお", k.Host.Document, "割り当ての無い記号は見えているとおりに確定してからアプリへ");
+        Assert.True(k.Host.Events.Contains("down:DC"), string.Join(" ", k.Host.Events));
+    }
+
+    [Test]
+    public static void MacControl_ShiftedSymbols_AreNotAssigned()
+    {
+        // US 配列の Ctrl+Shift+; (= :) は割り当てなし (英数への切り替えに回す)。確定してから Ctrl+Shift+; をアプリへ送る
+        var k = new Keyboard { ControlKeys = Meltype.Config.ControlKeyStyle.Mac };
+        k.Host.Layout = new() { [(0xBA, false)] = ';', [(0xBA, true)] = ':', [(0xDE, false)] = '\'', [(0xDE, true)] = '"' };
+        k.Type("aiueo");
+        CtrlPress(k, 'K');
         k.Key(VirtualKeys.LControl);
         k.Key(VirtualKeys.LShift);
         k.Host.PhysicalShift = true;
@@ -799,10 +817,14 @@ internal static class CompositionTests
         k.Host.PhysicalShift = false;
         k.Key(VirtualKeys.LShift, up: true);
         k.Key(VirtualKeys.LControl, up: true);
-        Assert.Equal("aiueo", k.Showing, "Ctrl+Shift+; (= Ctrl+:) も半角英字");
-        CtrlPress(k, 0xDC);
-        Assert.Equal("aiueo", k.Host.Document, "割り当ての無い記号は見えているとおりに確定してからアプリへ");
-        Assert.True(k.Host.Events.Contains("down:DC"), string.Join(" ", k.Host.Events));
+        Assert.Equal("アイウエオ", k.Host.Document, "確定してからアプリへ");
+        Assert.True(k.Host.Events.Contains("down:BA"), string.Join(" ", k.Host.Events));
+        // Shift なしで打つ : (JIS の : のキー) は半角英字のまま
+        var jis = new Keyboard { ControlKeys = Meltype.Config.ControlKeyStyle.Mac };
+        jis.Type("aiueo");
+        CtrlPress(jis, 'K');
+        CtrlPress(jis, 0xBA);
+        Assert.Equal("aiueo", jis.Showing);
     }
 
     [Test]
@@ -827,7 +849,7 @@ internal static class CompositionTests
     public static void MacControl_BeforeConversion_EntersClauseSelectionLikeArrows()
     {
         // 変換前の Ctrl+N / Ctrl+B / Ctrl+F も、↓ / → / ← と同じ (文節の選択に入る)
-        foreach (var (arrow, letter) in new[] { (VirtualKeys.Down, 'N'), (VirtualKeys.Up, 'P'), (VirtualKeys.Right, 'B'), (VirtualKeys.Left, 'F') })
+        foreach (var (arrow, letter) in new[] { (VirtualKeys.Down, 'N'), (VirtualKeys.Up, 'P'), (VirtualKeys.Right, 'F'), (VirtualKeys.Left, 'B') })
         {
             var arrows = new Keyboard();
             arrows.Type("tanniwotoru");
@@ -845,14 +867,101 @@ internal static class CompositionTests
     [Test]
     public static void MacControl_BF_MoveClauses()
     {
-        // Apple のガイドの表のとおり Ctrl+B = 次の文節 (→)、Ctrl+F = 前の文節 (←)
+        // Emacs や Cocoa の標準 (^b = moveBackward、^f = moveForward) と同じく、Ctrl+F = 次の文節 (→)、Ctrl+B = 前の文節 (←)
         var k = new Keyboard { ControlKeys = Meltype.Config.ControlKeyStyle.Mac };
         k.Type("tanniwotoru ");
         Assert.Equal(0, k.Host.View!.SelectedClause);
-        CtrlPress(k, 'B');
-        Assert.Equal(1, k.Host.View.SelectedClause, "Ctrl+B で次の文節");
         CtrlPress(k, 'F');
-        Assert.Equal(0, k.Host.View.SelectedClause, "Ctrl+F で前の文節");
+        Assert.Equal(1, k.Host.View.SelectedClause, "Ctrl+F で次の文節");
+        CtrlPress(k, 'B');
+        Assert.Equal(0, k.Host.View.SelectedClause, "Ctrl+B で前の文節");
+    }
+
+    /// <summary>アプリに届いたキーを押した数 (送り直したものと、そのまま通ったものの合計)。</summary>
+    private static int Downs(Keyboard k, int vk) => k.Host.Events.Count(e => e == $"down:{vk:X2}" || e == $"passed:{vk:X2}");
+
+    private static int Ups(Keyboard k, int vk) => k.Host.Events.Count(e => e == $"up:{vk:X2}" || e == $"passed-up:{vk:X2}");
+
+    [Test]
+    public static void MacControl_Arrows_InEnglishWord_PassThroughToApp()
+    {
+        // 英語と判定した語や、F9/F10 で英字にした後は ↑↓←→ の操作が無いので、割り当てなし: 確定してから Ctrl とキーをそのままアプリへ送る
+        foreach (var letter in "NPBFWOI")
+        {
+            foreach (var prepare in new[] { "hello", "aiueo+F10" })
+            {
+                var k = new Keyboard { ControlKeys = Meltype.Config.ControlKeyStyle.Mac };
+                k.Type(prepare.Split('+')[0]);
+                if (prepare.Contains("F10")) k.Press(VirtualKeys.F10);
+                var word = k.Showing;
+                CtrlPress(k, letter);
+                var events = string.Join(" ", k.Host.Events);
+                Assert.Equal(word, k.Host.Document, $"Ctrl+{letter}: 確定してから送る ({prepare})");
+                var ctrl = k.Host.Events.IndexOf("down:A2");
+                var key = k.Host.Events.IndexOf($"down:{(int)letter:X2}");
+                Assert.True(ctrl >= 0 && key > ctrl, $"Ctrl+{letter} がアプリに届く: " + events);
+                Assert.True(!k.Host.Events.Any(e => e is "down:25" or "down:26" or "down:27" or "down:28"), $"矢印キーは送らない: " + events);
+                Assert.Equal(1, Ups(k, letter), $"Ctrl+{letter} を離したこともアプリに届く: " + events);
+                Assert.Equal(1, Ups(k, 0xA2), "Ctrl を離したこともアプリに届く: " + events);
+            }
+        }
+    }
+
+    [Test]
+    public static void MacControl_Arrows_HeldCtrl_KeepsDownsAndUpsPaired()
+    {
+        // Ctrl を押したまま N → N → C: 最初の N で確定して Ctrl を送り、あとのキーも上げ下げがそろう
+        var k = new Keyboard { ControlKeys = Meltype.Config.ControlKeyStyle.Mac };
+        k.Type("hello");
+        k.Key(VirtualKeys.LControl);
+        k.Press('N');
+        k.Press('N');
+        k.Press('C');
+        k.Key(VirtualKeys.LControl, up: true);
+        var events = string.Join(" ", k.Host.Events);
+        Assert.Equal("hello", k.Host.Document);
+        foreach (var vk in new[] { 0xA2, 'N', 'C' })
+            Assert.Equal(Downs(k, vk), Ups(k, vk), $"{(int)vk:X2} の上げ下げがそろう: " + events);
+        Assert.Equal(1, Downs(k, 0xA2), "Ctrl を送る: " + events);
+        Assert.Equal(2, Downs(k, 'N'), "N を 2 回送る: " + events);
+        Assert.True(!k.Host.Events.Any(e => e.EndsWith(":28")), "↓ は送らない: " + events);
+    }
+
+    [Test]
+    public static void MacControl_VR_PageLikePageDownUp()
+    {
+        // 変換中の Ctrl+V = PageDown、Ctrl+R = PageUp と同じ (次のページ / 前のページ)
+        foreach (var (page, letter) in new[] { (0x22, 'V'), (0x21, 'R') })
+        {
+            var plain = new Keyboard();
+            plain.Type("egao ");
+            plain.Press(page);
+            var mac = new Keyboard { ControlKeys = Meltype.Config.ControlKeyStyle.Mac };
+            mac.Type("egao ");
+            CtrlPress(mac, letter);
+            Assert.Equal(plain.Showing, mac.Showing, $"Ctrl+{letter}");
+            Assert.Equal(plain.Host.Document, mac.Host.Document, $"Ctrl+{letter}");
+            Assert.Equal(plain.Host.View?.SelectedIndex, mac.Host.View?.SelectedIndex, $"Ctrl+{letter}");
+            Assert.Equal(plain.Host.Events.Count(e => e == $"down:{page:X2}"), mac.Host.Events.Count(e => e == $"down:{page:X2}"), $"Ctrl+{letter} は PageDown/PageUp と同じ扱い");
+            Assert.True(!mac.Host.Events.Any(e => e == $"down:{(int)letter:X2}"), $"Ctrl+{letter} そのものはアプリに送らない: " + string.Join(" ", mac.Host.Events));
+        }
+    }
+
+    [Test]
+    public static void MacControl_VR_NotConverting_PassThroughToApp()
+    {
+        // 変換前 (かな) の Ctrl+V / Ctrl+R はページ送りに使わない: 確定してからアプリへ (貼り付けなど)
+        var k = new Keyboard { ControlKeys = Meltype.Config.ControlKeyStyle.Mac };
+        k.Type("aiueo");
+        CtrlPress(k, 'V');
+        Assert.Equal("あいうえお", k.Host.Document);
+        Assert.True(k.Host.Events.Contains("down:56"), string.Join(" ", k.Host.Events));
+        Assert.True(!k.Host.Events.Any(e => e is "down:21" or "down:22"), "PageUp/PageDown にはならない");
+        // ATOK 式では Ctrl+V / Ctrl+R は元から割り当てなし
+        var atok = new Keyboard();
+        atok.Type("egao ");
+        CtrlPress(atok, 'V');
+        Assert.True(atok.Host.Events.Contains("down:56"), string.Join(" ", atok.Host.Events));
     }
 
     [Test]
@@ -928,13 +1037,14 @@ internal static class CompositionTests
     [Test]
     public static void MacControl_NavigationOnLetters_CommitsThenSendsArrow()
     {
-        // 英字のまま (F10) の入力中の Ctrl+N は、↓ と同じく確定してから ↓ を送る (n は入力しない)
+        // 英字のまま (F10) の入力中の Ctrl+N は、↓ に使い道が無いので割り当てなし: 確定してから Ctrl+N をそのまま送る (↓ は送らない、n は入力しない)
         var k = new Keyboard { ControlKeys = Meltype.Config.ControlKeyStyle.Mac };
         k.Type("aiueo");
         k.Press(VirtualKeys.F10);
         CtrlPress(k, 'N');
         Assert.Equal("aiueo", k.Host.Document);
-        Assert.True(k.Host.Events.Contains("down:28"), string.Join(" ", k.Host.Events));
+        Assert.True(k.Host.Events.Contains("down:4E"), string.Join(" ", k.Host.Events));
+        Assert.True(!k.Host.Events.Contains("down:28"), "↓ は送らない: " + string.Join(" ", k.Host.Events));
     }
 
     [Test]

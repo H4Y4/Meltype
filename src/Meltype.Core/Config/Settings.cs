@@ -99,7 +99,7 @@ public enum ControlKeyStyle
 {
     /// <summary>既定。Ctrl+U/I/O/P でかな・英字の切り替え。</summary>
     [Description("ATOK と同じ (Ctrl+U/I/O/P)")] Atok,
-    /// <summary>Mac の日本語入力と同じ。Ctrl+J/K/L/;/: でかな・英字、Ctrl+N/P/B/F/W/O/I で候補・文節の操作。</summary>
+    /// <summary>Mac の日本語入力と同じ。Ctrl+J/K/L/;/: でかな・英字、Ctrl+N/P/B/F/W/O/I/V/R で候補・文節の操作。</summary>
     [Description("Mac と同じ (Ctrl+J/K/L など)")] Mac,
 }
 
@@ -231,7 +231,7 @@ public sealed class Settings
     public PunctuationStyle Punctuation { get; set; } = PunctuationStyle.Japanese;
 
     [Category("1. 全般"), DisplayName("入力中の Ctrl キー"),
-     Description("変換ボックスに文字があるときの Ctrl+キーの割り当てです。「ATOK と同じ」は Ctrl+U/I/O/P でひらがな・カタカナ・半角英数・全角英数にします。「Mac と同じ」は Ctrl+J/K/L/;/: でひらがな・カタカナ・全角英数・半角カタカナ・半角英数にし、Ctrl+N/P で候補、Ctrl+B/F で文節の移動、Ctrl+W/O/I で文節の伸び縮みをします。入力が空のときの Ctrl+キーは、どちらでもアプリにそのまま渡します。")]
+     Description("変換ボックスに文字があるときの Ctrl+キーの割り当てです。「ATOK と同じ」は Ctrl+U/I/O/P でひらがな・カタカナ・半角英数・全角英数にします。「Mac と同じ」は Ctrl+J/K/L でひらがな・カタカナ・全角英数、Ctrl+;/:/' で半角英数にし、Ctrl+N/P で候補、Ctrl+F/B で文節の移動、Ctrl+W/O/I で文節の伸び縮み、Ctrl+V/R で候補のページ送りをします。「ATOK と同じ」の Ctrl+O/P は、Microsoft IME の Ctrl+U/I/O/P とは O・P の割り当てが違います。入力が空のときの Ctrl+キーは、どちらでもアプリにそのまま渡します。Meltype IME (TSF) では、この設定は効きません (変換中の Ctrl+キーは確定してアプリに渡します)。")]
     public ControlKeyStyle ControlKeys { get; set; } = ControlKeyStyle.Atok;
 
     [Category("1. 全般"), DisplayName("ライブ変換"),

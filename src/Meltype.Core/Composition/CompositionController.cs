@@ -531,7 +531,8 @@ public sealed class CompositionController
                 // 割り当てのあるキー: 対応するキー (ATOK 式は Ctrl+U/I/O/P → F6/F7/F10/F9。続けて押すと大文字・小文字も切り替わる) と同じに扱う。
                 vk = action.Vk;
                 controlShift = action.Shift;
-                e = e with { Vk = vk };
+                // 元のキーの文字 (Scan) は残さない (Ctrl+N が文字 n として変換ボックスに入らないように)。
+                e = e with { Vk = vk, Scan = 0 };
             }
             else
             {
@@ -2073,9 +2074,8 @@ public sealed class CompositionController
     };
 
     /// <summary>
-    /// Mac 式の英字キー。Apple のガイド「Macの日本語変換用のキーボードショートカット」の表のとおり (実機で要確認)。
-    /// 特に Ctrl+B = 次の文節 (→)・Ctrl+F = 前の文節 (←) は、Emacs の F = 前進とは逆だが、表の記載どおりにしている。
-    /// Ctrl+H (BackSpace) と Ctrl+V/R (候補のページ送り) は別の作業で扱うので、ここには入れない。
+    /// Mac 式の英字キー。macOS の日本語入力と Cocoa の標準の割り当てと同じ (Emacs と同じく Ctrl+F = 進む、Ctrl+B = 戻る)。
+    /// Ctrl+V / Ctrl+R は候補のページ送り (PageDown / PageUp)。Ctrl+H (BackSpace) は入れない。
     /// </summary>
     private static readonly Dictionary<int, ControlAction> MacControlKeys = new()
     {
@@ -2084,20 +2084,23 @@ public sealed class CompositionController
         ['L'] = new(VirtualKeys.F9),                 // 全角英字
         ['N'] = new(VirtualKeys.Down),               // 次の候補
         ['P'] = new(VirtualKeys.Up),                 // 前の候補
-        ['B'] = new(VirtualKeys.Right),              // 次の文節
-        ['F'] = new(VirtualKeys.Left),               // 前の文節
+        ['F'] = new(VirtualKeys.Right),              // 次の文節
+        ['B'] = new(VirtualKeys.Left),               // 前の文節
         ['W'] = new(VirtualKeys.Right, Shift: true), // 選択文節を伸ばす
         ['O'] = new(VirtualKeys.Right, Shift: true), // 選択文節を伸ばす
         ['I'] = new(VirtualKeys.Left, Shift: true),  // 選択文節を縮める
+        ['V'] = new(VirtualKeys.PageDown),           // 候補の次のページ
+        ['R'] = new(VirtualKeys.PageUp),             // 候補の前のページ
     };
 
     /// <summary>
     /// Mac 式の記号キー。配列によって仮想キーが違う (; は US が 0xBA・JIS が 0xBB) ので、キーが入力する文字で選ぶ。
-    /// Ctrl+; 半角カタカナ / Ctrl+: と Ctrl+' 半角英字。US 配列の : は Shift+; なので、Shift なしの Ctrl+' も使える。
+    /// Ctrl+; ・Ctrl+: ・Ctrl+' はローマ字 (半角英字) に変換する。: は Shift を押さずに打つキー (JIS 配列) だけで、
+    /// US 配列の Ctrl+Shift+; や Ctrl+Shift+' は割り当てなし (英数への切り替えのキーとして OS が使う)。
     /// </summary>
     private static readonly Dictionary<char, ControlAction> MacControlChars = new()
     {
-        [';'] = new(VirtualKeys.F8),
+        [';'] = new(VirtualKeys.F10),
         [':'] = new(VirtualKeys.F10),
         ['\''] = new(VirtualKeys.F10),
     };
@@ -2105,10 +2108,25 @@ public sealed class CompositionController
     /// <summary>入力中に Ctrl と一緒に押したキーの割り当て。無ければ null (確定してからアプリへ送る)。</summary>
     private ControlAction? ControlShortcut(KeyEvent e)
     {
+        var action = FindControlShortcut(e);
+        if (action is not { } found) return null;
+        // ↑↓←→ に置き換えるのは、その操作を使い切るときだけ (変換中と、変換前のかな)。英字だけの入力中は使い道が無いので、
+        // 置き換えると ↓ だけがアプリに届いてしまう。割り当てなしにして、Ctrl とキーをそのままアプリへ送る。
+        // ページ送りは変換中だけ。
+        var usable = found.Vk is VirtualKeys.PageUp or VirtualKeys.PageDown ? _converting
+            : found.Vk is VirtualKeys.Left or VirtualKeys.Up or VirtualKeys.Right or VirtualKeys.Down ? _converting || !_text.IsAlphanumeric
+            : true;
+        return usable ? found : null;
+    }
+
+    private ControlAction? FindControlShortcut(KeyEvent e)
+    {
         if (_options.ControlKeys() != Config.ControlKeyStyle.Mac)
             return AtokControlKeys.TryGetValue(e.Vk, out var atok) ? atok : null;
         if (MacControlKeys.TryGetValue(e.Vk, out var mac)) return mac;
-        if (!VirtualKeys.IsLetter(e.Vk) && _host.CharFromKey(e, _swallowedShift.Count > 0) is { } c && MacControlChars.TryGetValue(c, out var symbol)) return symbol;
+        if (VirtualKeys.IsLetter(e.Vk)) return null;
+        var shift = _swallowedShift.Count > 0;
+        if (_host.CharFromKey(e, shift) is { } c && !(c == ':' && shift) && MacControlChars.TryGetValue(c, out var symbol)) return symbol;
         return null;
     }
 
