@@ -271,7 +271,7 @@ public sealed class MeltypeSession
 
     private void TrackCodeKey(int vk, char? ch, bool modifier)
     {
-        if (modifier || vk is VirtualKeys.Left or VirtualKeys.Right or VirtualKeys.Up or VirtualKeys.Down or 0x21 or 0x22 or 0x23 or 0x24 or 0x2E)
+        if (modifier || vk is VirtualKeys.Left or VirtualKeys.Right or VirtualKeys.Up or VirtualKeys.Down or VirtualKeys.PageUp or VirtualKeys.PageDown or 0x23 or 0x24 or 0x2E)
             _codeLine.Invalidate();
         else if (vk == VirtualKeys.Return) _codeLine.NewLine();
         else if (vk == VirtualKeys.Back) _codeLine.Backspace();
