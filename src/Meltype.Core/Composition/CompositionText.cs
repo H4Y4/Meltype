@@ -800,7 +800,7 @@ public sealed class CompositionText
         DisplayMode.FullWidthAlphanumeric => ToFullWidth(ApplyCase(Raw, Case)),
         DisplayMode.Hiragana => AllKana(final),
         DisplayMode.Katakana => ToKatakana(AllKana(final)),
-        DisplayMode.HalfWidthKatakana => ToHalfWidthKatakana(ToKatakana(AllKana(final))),
+        DisplayMode.HalfWidthKatakana => ToHalfWidthDisplay(ToKatakana(AllKana(final))),
         _ => IsNumeric ? Raw : RenderSegments(final, convert),
     };
 
@@ -1236,6 +1236,25 @@ public sealed class CompositionText
             builder.Append(index >= 0 ? half[index] : c);
         }
         return builder.ToString();
+    }
+
+    /// <summary>F8 (半角カナ表示) 用。半角カタカナにしたうえで、全角の英数字・記号・空白も半角にする。</summary>
+    public static string ToHalfWidthDisplay(string katakana)
+    {
+        var chars = ToHalfWidthKatakana(katakana).ToCharArray();
+        for (var i = 0; i < chars.Length; i++)
+        {
+            chars[i] = chars[i] switch
+            {
+                '　' => ' ',
+                '’' => '\'',
+                '”' => '"',
+                '￥' => '¥',
+                >= '！' and <= '～' => (char)(chars[i] - 0xFEE0),
+                _ => chars[i],
+            };
+        }
+        return new string(chars);
     }
 
     public static string ToFullWidth(string text)
