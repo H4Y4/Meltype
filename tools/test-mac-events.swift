@@ -29,10 +29,22 @@ final class EventClient: NSObject, IMKTextInput {
 #if !REAL_CONVERTER
 final class MeltypeConverter {
  static let shared=MeltypeConverter()
- func clauses(for text:String,context:String?)->[(reading:String,text:String)] {[]}
- func candidates(for text:String)->[String] {[]}
+ func clauses(for text:String,context:String?)->[(reading:String,text:String)] {text=="つくえ" ? [(reading:text,text:"机")] : []}
+ // ページ送りのテスト用に、つくえ だけ 30 個の候補を返す (他の読みは今までどおり空)。
+ func candidates(for text:String)->[String] {text=="つくえ" ? (1...30).map {"候補\($0)"} : []}
 }
 #endif
+// 候補ウィンドウの実物 (IMKCandidates) は画面が無いと動かせないので、moveDown / moveUp の回数から選択の位置を数える偽物に差し替える。
+// 実物が端で止まるか回るかはここでは確かめられない (InputController.selectInWindow は端を越える動きをしない前提)。
+final class RecordingCandidates: IMKCandidates {
+ var position=0; var shown=false
+ override func update() {position=0}
+ override func show(_ hint:IMKCandidatesLocationHint) {shown=true}
+ override func hide() {shown=false}
+ override func isVisible()->Bool {shown}
+ override func moveDown(_ sender:Any?) {position+=1}
+ override func moveUp(_ sender:Any?) {position-=1}
+}
 var candidatesWindow: IMKCandidates? = nil
 @main
 struct EventTests {
@@ -253,6 +265,41 @@ struct EventTests {
   precondition(FileManager.default.fileExists(atPath:directory+"/azooKey"),"converter ignored isolated data directory")
   passed+=3
   print("PASS: actual azooKey candidates, clause reading coverage, isolated data directory")
+  #endif
+  #if !REAL_CONVERTER
+  // PageDown / PageUp / Shift+↓↑ のページ送りで、候補ウィンドウの選択が本体の選択からずれないこと (9 個以上の移動、最後⇔最初の回り込み)。
+  // NSEvent の characters は空にして送る (機能キーの私用領域の文字を避けるため)。
+  check("candidate paging keeps window selection in sync") { controller,client in
+   // 変換エンジンの関数を登録するのは main.swift なので、ここでも登録する (他の確認に影響しないよう、このテストを最後に置く)。
+   NativeCore.shared.initialize()
+   let window=RecordingCandidates(server:server,panelType:kIMKSingleColumnScrollingCandidatePanel)!
+   candidatesWindow=window
+   defer {candidatesWindow=nil}
+   type(controller,client,"tsukue")
+   _=key(controller,client," ",code:UInt16(kVK_Space))
+   // 変換エンジンの候補は最初の候補送りで足されるので、↓ ↑ で先頭に戻しておく。
+   _=key(controller,client,"",code:UInt16(kVK_DownArrow)); _=key(controller,client,"",code:UInt16(kVK_UpArrow))
+   let list=(controller.candidates(nil) as? [String]) ?? []
+   precondition(list.count>18,"need 3+ pages: \(list)")
+   // 一覧を作り直した直後の移動は次の周回に回すので、回してから確かめる。
+   RunLoop.current.run(until:Date(timeIntervalSinceNow:0.05))
+   precondition(window.shown && window.position==0,"window starts at head")
+   let size=9; let pages=(list.count+size-1)/size
+   var page=0
+   for step in ["PageDown","PageDown","PageUp","shiftDown","shiftUp","PageUp","PageUp"]+Array(repeating:"PageDown",count:pages) {
+    switch step {
+    case "PageDown": _=key(controller,client,"",code:UInt16(kVK_PageDown)); page=(page+1)%pages
+    case "PageUp": _=key(controller,client,"",code:UInt16(kVK_PageUp)); page=(page+pages-1)%pages
+    case "shiftDown": _=key(controller,client,"",code:UInt16(kVK_DownArrow),flags:.shift); page=(page+1)%pages
+    default: _=key(controller,client,"",code:UInt16(kVK_UpArrow),flags:.shift); page=(page+pages-1)%pages
+    }
+    precondition(window.position==page*size,"\(step): window at \(window.position), expected \(page*size)")
+   }
+   // 本体の選択もウィンドウと同じ位置か: 数字キーの 1 で、そのページの先頭の候補が確定する。
+   _=key(controller,client,"",code:UInt16(kVK_PageDown)); page=(page+1)%pages
+   _=key(controller,client,"1",code:UInt16(kVK_ANSI_1))
+   equal(client.document,list[page*size])
+  }
   #endif
   print("\(passed) Mac event/integration cases passed (synthetic client; OS IME registration and app GUI NOT_RUN)")
  }

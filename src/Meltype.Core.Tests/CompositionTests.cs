@@ -213,7 +213,7 @@ internal static class CompositionTests
         public Keyboard(bool live = false, bool direct = false, ConversionHistory? history = null, IKanjiConverter? converter = null,
             Func<string, IReadOnlyList<string>>? moreCandidates = null, UserDictionary? userDictionary = null, LanguageMemory? languages = null,
             TranslationDictionary? translations = null, TranslationHistory? translationHistory = null, bool slashAsMiddleDot = false, Predictor? predictor = null,
-            Func<DateTime>? now = null, bool showTypedKeys = false)
+            Func<DateTime>? now = null, bool showTypedKeys = false, bool shiftArrowPaging = false)
         {
             Direct = direct;
             Controller = new CompositionController(Gate, Detector, converter ?? Converter, Host, new CompositionOptions
@@ -243,6 +243,7 @@ internal static class CompositionTests
                 SlashAsMiddleDot = () => slashAsMiddleDot,
                 Now = now ?? (() => DateTime.Now),
                 ShowTypedKeys = () => showTypedKeys,
+                ShiftArrowPaging = shiftArrowPaging,
             });
             Controller.Committed += Sigil.Append;
             Host.Replayed += e =>
@@ -549,6 +550,190 @@ internal static class CompositionTests
         k.Key(VirtualKeys.LShift, up: true);
         Assert.Equal(k.Host.View!.Candidates.Count - 1, k.Host.View!.SelectedIndex, "先頭から戻ると最後の候補へ");
       }
+
+    /// <summary>候補が 9 個より多い読み (かわ) の Keyboard。変換エンジンの候補を 30 個足す。</summary>
+    private static Keyboard ManyCandidates(bool shiftArrowPaging = false)
+    {
+        var k = new Keyboard(shiftArrowPaging: shiftArrowPaging, moreCandidates: reading => reading == "かわ" ? Enumerable.Range(1, 30).Select(i => "候補" + i).ToArray() : []);
+        k.Type("kawa ");
+        Assert.True(k.Host.View!.Candidates.Count > CompositionController.CandidatePageSize * 2, "3 ページ以上ある: " + k.Host.View.Candidates.Count);
+        Assert.Equal(0, k.Host.View.SelectedIndex);
+        return k;
+    }
+
+    private static void PressWithShift(Keyboard k, int vk)
+    {
+        k.Key(VirtualKeys.LShift);
+        k.Press(vk);
+        k.Key(VirtualKeys.LShift, up: true);
+    }
+
+    [Test]
+    public static void PageDown_DuringConversion_GoesToNextPage()
+    {
+        // 変換中の PageDown: 次のページの先頭 (10 番目、19 番目…)。最後のページの次は最初のページの先頭に戻る。
+        var k = ManyCandidates();
+        var size = CompositionController.CandidatePageSize;
+        var count = k.Host.View!.Candidates.Count;
+        k.Press(VirtualKeys.PageDown);
+        Assert.Equal(size, k.Host.View!.SelectedIndex, "10 番目");
+        k.Press(VirtualKeys.PageDown);
+        Assert.Equal(size * 2, k.Host.View!.SelectedIndex, "19 番目");
+        var lastPage = (count - 1) / size * size;
+        while (k.Host.View!.SelectedIndex != lastPage) k.Press(VirtualKeys.PageDown);
+        k.Press(VirtualKeys.PageDown);
+        Assert.Equal(0, k.Host.View!.SelectedIndex, "最後のページから最初のページの先頭へ");
+        Assert.True(k.Host.View.Converting && k.Host.Output.Count == 0, "確定してアプリへ通らない");
+    }
+
+    [Test]
+    public static void PageUp_DuringConversion_GoesToPreviousPage()
+    {
+        var k = ManyCandidates();
+        var size = CompositionController.CandidatePageSize;
+        var lastPage = (k.Host.View!.Candidates.Count - 1) / size * size;
+        k.Press(VirtualKeys.PageUp);
+        Assert.Equal(lastPage, k.Host.View!.SelectedIndex, "最初のページから最後のページの先頭へ");
+        k.Press(VirtualKeys.PageUp);
+        Assert.Equal(lastPage - size, k.Host.View!.SelectedIndex);
+        k.Press(VirtualKeys.PageDown);
+        Assert.Equal(lastPage, k.Host.View!.SelectedIndex, "PageDown で戻る");
+    }
+
+    [Test]
+    public static void ShiftDownUp_ByDefault_MovesOneCandidateAtATime()
+    {
+        // 既定 (Windows・Linux) では Shift+↓ / Shift+↑ は今までどおり ↓ ↑ と同じく 1 つずつ。PageDown はページ送り。
+        var k = ManyCandidates();
+        PressWithShift(k, VirtualKeys.Down);
+        Assert.Equal(1, k.Host.View!.SelectedIndex);
+        PressWithShift(k, VirtualKeys.Down);
+        Assert.Equal(2, k.Host.View!.SelectedIndex);
+        PressWithShift(k, VirtualKeys.Up);
+        Assert.Equal(1, k.Host.View!.SelectedIndex);
+        k.Press(VirtualKeys.PageDown);
+        Assert.Equal(CompositionController.CandidatePageSize, k.Host.View!.SelectedIndex, "PageDown はページ送り");
+    }
+
+    [Test]
+    public static void ShiftDownUp_WithShiftArrowPaging_PagesLikePageDownUp()
+    {
+        // ShiftArrowPaging (Mac) では macOS 標準の IME と同じく Shift+↓ / Shift+↑ でもページ単位。Shift なしの ↓ ↑ は 1 つずつ。
+        var k = ManyCandidates(shiftArrowPaging: true);
+        var size = CompositionController.CandidatePageSize;
+        PressWithShift(k, VirtualKeys.Down);
+        Assert.Equal(size, k.Host.View!.SelectedIndex);
+        PressWithShift(k, VirtualKeys.Down);
+        Assert.Equal(size * 2, k.Host.View!.SelectedIndex);
+        PressWithShift(k, VirtualKeys.Up);
+        Assert.Equal(size, k.Host.View!.SelectedIndex);
+        PressWithShift(k, VirtualKeys.Up);
+        Assert.Equal(0, k.Host.View!.SelectedIndex);
+        k.Press(VirtualKeys.Down);
+        Assert.Equal(1, k.Host.View!.SelectedIndex, "Shift なしは 1 つずつ");
+    }
+
+    [Test]
+    public static void PageDown_FromMiddleOfPage_GoesToNextPageHead()
+    {
+        // ページの途中 (3 番目) からでも、次のページの先頭へ。
+        var k = ManyCandidates();
+        k.Press(VirtualKeys.Down);
+        k.Press(VirtualKeys.Down);
+        k.Press(VirtualKeys.PageDown);
+        Assert.Equal(CompositionController.CandidatePageSize, k.Host.View!.SelectedIndex);
+    }
+
+    [Test]
+    public static void PageDown_ThenNumberKey_SelectsFromThatPage()
+    {
+        // ページ送りのあとの数字キーは、そのページの中から選ぶ (2 → 11 番目)。
+        var k = ManyCandidates();
+        var candidates = k.Host.View!.Candidates;
+        k.Press(VirtualKeys.PageDown);
+        k.Press('2');
+        Assert.Equal(candidates[CompositionController.CandidatePageSize + 1], k.Host.Document);
+    }
+
+    [Test]
+    public static void PageDown_WhenOnePage_KeepsSelection()
+    {
+        // 1 ページに収まるときは、選んでいる候補を動かさない (PageUp も同じ)。キーは使うので確定してアプリへは通さない。
+        foreach (var shiftArrowPaging in new[] { false, true })
+        {
+            var k = new Keyboard(shiftArrowPaging: shiftArrowPaging);
+            k.Type("zozozo ");
+            Assert.Equal(5, k.Host.View!.Candidates.Count);
+            k.Press(VirtualKeys.Down);
+            k.Press(VirtualKeys.Down);
+            k.Press(VirtualKeys.PageDown);
+            Assert.Equal(2, k.Host.View!.SelectedIndex);
+            k.Press(VirtualKeys.PageUp);
+            Assert.Equal(2, k.Host.View!.SelectedIndex);
+            if (shiftArrowPaging)
+            {
+                PressWithShift(k, VirtualKeys.Down);
+                PressWithShift(k, VirtualKeys.Up);
+                Assert.Equal(2, k.Host.View!.SelectedIndex, "Shift+↓↑ も同じ");
+            }
+            Assert.True(k.Host.View.Converting && k.Host.Output.Count == 0, "変換中のまま");
+        }
+    }
+
+    [Test]
+    public static void PageDown_WhenOnePage_DoesNotCountAsChosen()
+    {
+        // 見た目が変わらない PageDown は「選び直した」ことにしない: 学習しない。
+        var history = new ConversionHistory(null);
+        var k = new Keyboard(history: history, moreCandidates: reading => reading == "かわ" ? ["川", "皮"] : []);
+        k.Type("kawa ");
+        k.Press(VirtualKeys.PageDown);
+        k.Press(VirtualKeys.Return);
+        Assert.Equal(0, history.Count, "選び直していないので覚えない");
+    }
+
+    [Test]
+    public static void PageDown_ChangesOnlySelectedClause()
+    {
+        // 文節が複数あるときは、選んでいる文節だけがページ送りされる。
+        var k = new Keyboard(moreCandidates: reading => reading == "たんいを" ? Enumerable.Range(1, 30).Select(i => "候補" + i).ToArray() : []);
+        k.Type("tanniwotoru ");
+        var second = k.Host.View!.Clauses![1];
+        k.Press(VirtualKeys.PageDown);
+        Assert.Equal(CompositionController.CandidatePageSize, k.Host.View!.SelectedIndex);
+        Assert.Equal(second, k.Host.View.Clauses![1]);
+    }
+
+    [Test]
+    public static void PageDownUp_BeforeConversion_KeepsOldBehavior()
+    {
+        // 変換前 (かなを打っているだけ) の PageUp / PageDown は今までどおり: 変換にも候補選びにもならず、確定してアプリへ通る。
+        foreach (var vk in new[] { VirtualKeys.PageDown, VirtualKeys.PageUp })
+        {
+            var k = new Keyboard();
+            k.Type("kawa");
+            k.Press(vk);
+            Assert.True(k.Host.View?.Converting != true, "変換にならない");
+            Assert.Equal("かわ", k.Host.Document);
+            Assert.True(k.Host.Events.Contains($"down:{vk:X}"), "キーはアプリへ通る: " + string.Join("|", k.Host.Events));
+        }
+    }
+
+    [Test]
+    public static void ShiftUpDown_BeforeConversion_KeepsOldBehavior()
+    {
+        // 変換前の Shift+↓ は今までどおり文節の選択に入る (最初の文節、候補は変えない)。Shift+↑ は前の候補へ。
+        var k = new Keyboard();
+        k.Type("kawa");
+        PressWithShift(k, VirtualKeys.Down);
+        Assert.True(k.Host.View!.Converting, "変換に入る");
+        Assert.Equal(0, k.Host.View.SelectedIndex);
+        k = new Keyboard();
+        k.Type("kawa");
+        PressWithShift(k, VirtualKeys.Up);
+        Assert.True(k.Host.View!.Converting, "変換に入る");
+        Assert.Equal(k.Host.View.Candidates.Count - 1, k.Host.View.SelectedIndex, "前の候補 (最後) へ");
+    }
 
     [Test]
     public static void F10_CyclesLetterCase()

@@ -165,6 +165,12 @@ public sealed record CompositionOptions
     public Func<bool> SpaceAroundEnglish { get; init; } = () => false;
     public Func<bool> AutomaticEnglishSpacing { get; init; } = () => false;
 
+    /// <summary>
+    /// 変換中の Shift+↓ / Shift+↑ で候補をページ単位に送るか (設定ではなく、OS ごとの切り替え。macOS 標準の IME に合わせる Mac だけ true)。
+    /// false なら Shift+↓ / Shift+↑ は ↓ ↑ と同じく 1 つずつ。PageDown / PageUp はこの値によらずページ送り。
+    /// </summary>
+    public bool ShiftArrowPaging { get; init; }
+
     /// <summary>句読点の組み合わせ (設定)。</summary>
     public Func<Config.PunctuationStyle> Punctuation { get; init; } = () => Config.PunctuationStyle.Japanese;
 
@@ -954,6 +960,15 @@ public sealed class CompositionController
                 // Shift+Space: 前の候補へ (Microsoft IME と同じ。Mac でも Shift を押したまま Space で戻れるように: issue #140)
                 NextCandidate(-1);
                 return true;
+            case VirtualKeys.Down when _options.ShiftArrowPaging && (shift || _host.IsShiftDown()):
+            case VirtualKeys.PageDown:
+                // PageDown (Microsoft IME) / Shift+↓ (macOS 標準の IME。ShiftArrowPaging のとき): 次のページの先頭の候補へ。
+                NextCandidatePage(+1);
+                return true;
+            case VirtualKeys.Up when _options.ShiftArrowPaging && (shift || _host.IsShiftDown()):
+            case VirtualKeys.PageUp:
+                NextCandidatePage(-1);
+                return true;
             case VirtualKeys.Convert:
             case VirtualKeys.Space:
             case VirtualKeys.Down:
@@ -1506,6 +1521,24 @@ public sealed class CompositionController
         var clause = _clauses[_selectedClause];
         if (!clause.IsEnglish && !clause.Expanded) Expand(clause);
         clause.Index = (clause.Index + step + clause.Candidates.Count) % clause.Candidates.Count;
+        clause.Changed = true;
+    }
+
+    /// <summary>
+    /// 候補をページ単位で送る (PageDown / Shift+↓ が +1、PageUp / Shift+↑ が -1)。移るのは次 (前) のページの先頭の候補で、
+    /// 最後のページの次は最初のページ、最初のページの前は最後のページに回る (NextCandidate と同じ循環)。
+    /// 1 ページに収まるときは何もしない (選んでいる候補を動かさない)。キーは使うので、確定してアプリへ通すことはない。
+    /// </summary>
+    private void NextCandidatePage(int step)
+    {
+        var clause = _clauses[_selectedClause];
+        if (!clause.IsEnglish && !clause.Expanded) Expand(clause);
+        var pages = (clause.Candidates.Count + CandidatePageSize - 1) / CandidatePageSize;
+        if (pages <= 1) return;
+        var page = (Math.Max(0, clause.Index) / CandidatePageSize + step + pages) % pages;
+        var index = page * CandidatePageSize;
+        if (index == clause.Index) return;
+        clause.Index = index;
         clause.Changed = true;
     }
 

@@ -134,7 +134,7 @@ public sealed class MeltypeSession
     /// 既定の辞書・学習データ (保存場所は <see cref="AppPaths"/>) で作る。converter は OS 側の変換エンジン、
     /// moreCandidates は読みに対する候補の一覧 (無ければ null)、wordChecker は OS のスペルチェッカー (無ければ null)。
     /// </summary>
-    public static MeltypeSession CreateDefault(IKanjiConverter converter, Func<string, IReadOnlyList<string>>? moreCandidates, IWordChecker? wordChecker, bool autoSpacing = false)
+    public static MeltypeSession CreateDefault(IKanjiConverter converter, Func<string, IReadOnlyList<string>>? moreCandidates, IWordChecker? wordChecker, bool autoSpacing = false, bool shiftArrowPaging = false)
     {
         AppPaths.MigrateFromOldName();
         Directory.CreateDirectory(AppPaths.DataDirectory);
@@ -171,6 +171,7 @@ public sealed class MeltypeSession
             SlashAsMiddleDot = () => settings.SlashAsMiddleDot,
             SpaceAroundEnglish = () => settings.SpaceAroundEnglish,
             AutomaticEnglishSpacing = () => autoSpacing,
+            ShiftArrowPaging = shiftArrowPaging,
             Punctuation = () => settings.Punctuation,
             ControlKeys = () => settings.ControlKeys,
             TranslationHistory = new TranslationHistory(AppPaths.TranslationHistoryFile),
@@ -272,7 +273,7 @@ public sealed class MeltypeSession
 
     private void TrackCodeKey(int vk, char? ch, bool modifier)
     {
-        if (modifier || vk is VirtualKeys.Left or VirtualKeys.Right or VirtualKeys.Up or VirtualKeys.Down or 0x21 or 0x22 or 0x23 or 0x24 or 0x2E)
+        if (modifier || vk is VirtualKeys.Left or VirtualKeys.Right or VirtualKeys.Up or VirtualKeys.Down or VirtualKeys.PageUp or VirtualKeys.PageDown or 0x23 or 0x24 or 0x2E)
             _codeLine.Invalidate();
         else if (vk == VirtualKeys.Return) _codeLine.NewLine();
         else if (vk == VirtualKeys.Back) _codeLine.Backspace();
