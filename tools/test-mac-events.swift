@@ -9,6 +9,10 @@ final class EventClient: NSObject, IMKTextInput {
  // 選択範囲 (nil なら従来どおり、文書の終わりにキャレットがあるだけ)。marked は markedLocation の位置にある変換中の文字 (document には含めない)。
  var selection:NSRange?=nil; var markedLocation=0
  var caret:Int {selection?.location ?? (document as NSString).length}
+ // false なら、ターミナルのように setMarkedText が選択範囲を置き換えない (変換中の文字は文書の終わりに出て、選択は残る)。
+ var replacesSelection=true
+ // attributedSubstring が返す属性 (nil なら属性なし)。範囲ごとに指定する。
+ var attributeRuns:[(NSRange,[NSAttributedString.Key:Any])]?=nil
  func text(_ value:Any?)->String { (value as? NSAttributedString)?.string ?? (value as? String ?? "") }
  func insertText(_ string: Any!, replacementRange: NSRange) {
   let value=text(string)
@@ -21,12 +25,20 @@ final class EventClient: NSObject, IMKTextInput {
  func setMarkedText(_ string: Any!, selectionRange: NSRange, replacementRange: NSRange) {
   let value=text(string)
   // 変換中でなければ、今の選択範囲は変換中の文字に置き換わる (IMK の挙動)。
-  if marked.isEmpty && !value.isEmpty { if let selection { document=(document as NSString).replacingCharacters(in:selection,with:""); markedLocation=selection.location; self.selection=NSRange(location:selection.location,length:0) } else { markedLocation=(document as NSString).length } }
+  if marked.isEmpty && !value.isEmpty && !replacesSelection { markedLocation=(document as NSString).length }
+  else if marked.isEmpty && !value.isEmpty { if let selection { document=(document as NSString).replacingCharacters(in:selection,with:""); markedLocation=selection.location; self.selection=NSRange(location:selection.location,length:0) } else { markedLocation=(document as NSString).length } }
   marked=value
  }
- func selectedRange()->NSRange {marked.isEmpty ? (selection ?? NSRange(location:(document as NSString).length,length:0)) : NSRange(location:markedLocation+(marked as NSString).length,length:0)}
+ func selectedRange()->NSRange {marked.isEmpty || !replacesSelection ? (selection ?? NSRange(location:(document as NSString).length,length:0)) : NSRange(location:markedLocation+(marked as NSString).length,length:0)}
  func markedRange()->NSRange {marked.isEmpty ? NSRange(location:NSNotFound,length:0):NSRange(location:markedLocation,length:(marked as NSString).length)}
- func attributedSubstring(from range:NSRange)->NSAttributedString! { let text=document as NSString; guard range.location != NSNotFound && range.location<=text.length else{return nil}; return NSAttributedString(string:text.substring(with:NSRange(location:range.location,length:min(range.length,text.length-range.location)))) }
+ func attributedSubstring(from range:NSRange)->NSAttributedString! {
+  let text=document as NSString; guard range.location != NSNotFound && range.location<=text.length else{return nil}
+  let part=NSMutableAttributedString(string:text.substring(with:NSRange(location:range.location,length:min(range.length,text.length-range.location))))
+  for (run,attributes) in attributeRuns ?? [] {
+   let intersection=NSIntersectionRange(run,range); if intersection.length>0 { part.addAttributes(attributes,range:NSRange(location:intersection.location-range.location,length:intersection.length)) }
+  }
+  return part
+ }
  func length()->Int {(document as NSString).length}
  func characterIndex(for point:NSPoint, tracking mode:IMKLocationToOffsetMappingMode, inMarkedRange:UnsafeMutablePointer<ObjCBool>!)->Int {inMarkedRange?.pointee=false; return 0}
  func attributes(forCharacterIndex index:Int, lineHeightRectangle rectangle:UnsafeMutablePointer<NSRect>!)->[AnyHashable:Any]! {rectangle?.pointee=NSRect(x:0,y:0,width:1,height:20); return [:]}
@@ -189,6 +201,40 @@ struct EventTests {
    _=key(controller,client,"",code:UInt16(kVK_JIS_Eisu))
    client.document="今日"; client.selection=NSRange(location:0,length:2)
    precondition(!reconvert(controller,client),"direct mode must pass Control+Shift+R"); equal(client.document,"今日")
+  }
+  // 書式付きの選択 (リンク・添付・範囲によって違う書式) は、取り消すと書式が失われるので再変換しない。属性が全体で一様なら始める。
+  let bold=NSFont.boldSystemFont(ofSize:12)
+  for (label,runs,starts) in [
+   ("uniform font",[(NSRange(location:0,length:2),[NSAttributedString.Key.font:NSFont.systemFont(ofSize:12)])],true),
+   ("mixed bold",[(NSRange(location:0,length:1),[NSAttributedString.Key.font:bold])],false),
+   ("link",[(NSRange(location:0,length:2),[NSAttributedString.Key.link:URL(string:"https://example.com")!])],false),
+   ("partial link",[(NSRange(location:1,length:1),[NSAttributedString.Key.link:URL(string:"https://example.com")!])],false),
+   ("attachment",[(NSRange(location:0,length:1),[NSAttributedString.Key.attachment:NSTextAttachment()])],false),
+  ] as [(String,[(NSRange,[NSAttributedString.Key:Any])],Bool)] {
+   check("reconversion with formatted selection: \(label)") { controller,client in
+    client.document="今日は"; client.selection=NSRange(location:0,length:2); client.attributeRuns=runs
+    let started=reconvert(controller,client)
+    equal(started ? "start" : "pass",starts ? "start" : "pass")
+    if !starts { equal(client.document,"今日は"); equal(client.marked,"") }
+   }
+  }
+  // setMarkedText が選択範囲を置き換えないクライアント (ターミナルなど): 始めずにキーをアプリへ通し、元の文字を二重に入れない。
+  check("reconversion is not started when marked text does not replace the selection") { controller,client in
+   client.replacesSelection=false
+   client.document="さっき今日は"; client.selection=NSRange(location:3,length:2)
+   precondition(!reconvert(controller,client),"Control+Shift+R must reach the app")
+   equal(client.document,"さっき今日は"); equal(client.marked,"")
+   // 本体の再変換も取り消されていて、Esc はアプリへ通り、次の入力も普通にできる
+   precondition(!key(controller,client,"\u{1B}",code:UInt16(kVK_Escape)),"no reconversion must remain")
+   type(controller,client,"ka"); _=key(controller,client,"\r",code:UInt16(kVK_Return))
+   equal(client.document,"さっき今日はか")
+  }
+  check("reconversion Esc does not reinsert when the marked range moved") { controller,client in
+   client.document="さっき今日は晴れ"; client.selection=NSRange(location:3,length:2)
+   precondition(reconvert(controller,client),"must start")
+   client.markedLocation+=1
+   precondition(key(controller,client,"\u{1B}",code:UInt16(kVK_Escape)),"Esc must cancel")
+   equal(client.document,"さっきは晴れ"); equal(client.marked,"")
   }
   // 読みの推定の単体確認。macOS の CFStringTokenizer の辞書に依存するので、どの版でも確実な語 (かな・今日・東京とその組み合わせ) だけ失敗にする。
   // 辞書の版で読みがずれる語 (日本語・私・お兄さん・明日 …) は、結果を表示するだけで失敗にしない。

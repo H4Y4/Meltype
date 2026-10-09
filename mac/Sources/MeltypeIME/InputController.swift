@@ -15,8 +15,9 @@ final class MeltypeInputController: IMKInputController {
     private var hasMarkedText = false
     private var codeInput = false
     private var directInput = false
-    /// 再変換中の、元の選択文字。変換中の文字が選択範囲を置き換えているので、取り消したときはこれを入れ直す。
+    /// 再変換中の、元の選択文字と、その位置。変換中の文字が選択範囲を置き換えているので、取り消したときはこれを入れ直す。
     private var reconvertingText: String?
+    private var reconvertingLocation = NSNotFound
     private var suggestionPanel: NSPanel?
     private var displayedSuggestion: String?
     private var dictionaryObserver: NSObjectProtocol?
@@ -109,17 +110,30 @@ final class MeltypeInputController: IMKInputController {
         return result.consumed
     }
 
-    /// 選択範囲の文字を再変換する。選択が無い・長すぎる・読みが取れない・本体が始めなかったときは false (何も変えない)。
+    /// 選択範囲の文字を再変換する。選択が無い・長すぎる・読みが取れない・書式付き・本体が始めなかった・
+    /// クライアントが選択範囲を置き換えないときは false (何も変えない)。
     private func startReconversion(_ client: IMKTextInput) -> Bool {
         let selection = client.selectedRange()
         guard selection.location != NSNotFound, selection.length > 0, selection.length <= Reconversion.maxLength,
-              let text = client.attributedSubstring(from: selection)?.string,
+              let attributed = client.attributedSubstring(from: selection),
+              !Reconversion.hasRichFormatting(attributed),
+              case let text = attributed.string,
               (text as NSString).length == selection.length,
               let reading = Reconversion.reading(of: text),
               let result = NativeCore.shared.reconvert(session, text: text, reading: reading),
               result.consumed, result.view != nil else { return false }
         reconvertingText = text
+        reconvertingLocation = selection.location
         apply(result, to: client)
+        // 変換中の文字が選択範囲を置き換えていなければ (ターミナルなど)、取り消したときに元の文字が二重に入るので、やめてキーをアプリへ通す。
+        let marked = client.markedRange()
+        if marked.location != selection.location || marked.length == 0 || client.selectedRange().length > 0 {
+            reconvertingText = nil
+            // 本体の再変換を取り消す (Esc と同じ。結果は使わない)
+            _ = NativeCore.shared.handleKey(session, vk: 0x1B, character: 0, modifiers: 0, before: nil, after: nil)
+            hideComposition(client: client)
+            return false
+        }
         return true
     }
 
@@ -257,10 +271,13 @@ final class MeltypeInputController: IMKInputController {
         if let view = result.view {
             showComposition(view, client: client)
         } else if let original = reconvertingText {
-            // 再変換の取り消し (Esc・読みを全部消した): 確定せずに終わったので、変換中の文字を元の文字に戻す。
+            // 再変換の取り消し (Esc・読みを全部消した・元の文字のまま確定した): 確定せずに終わったので、変換中の文字を元の文字に戻す。
+            // 変換中の文字が元の選択範囲の位置にあるときだけ (動いていたら、別の場所に二重に入れてしまう)。
             reconvertingText = nil
-            client.insertText(NSAttributedString(string: original), replacementRange: NSRange(location: NSNotFound, length: 0))
-            hasMarkedText = false
+            if client.markedRange().location == reconvertingLocation {
+                client.insertText(NSAttributedString(string: original), replacementRange: NSRange(location: NSNotFound, length: 0))
+                hasMarkedText = false
+            }
             hideComposition(client: client)
         } else {
             hideComposition(client: client)

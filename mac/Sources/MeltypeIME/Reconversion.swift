@@ -8,6 +8,24 @@ enum Reconversion {
     /// 再変換できる選択文字の長さの上限 (UTF-16 の要素数。本体の MeltypeSession.MaxReconversionLength と同じ)。
     static let maxLength = 128
 
+    /// 取り消したり元の文字のまま確定したりすると、変換中の文字がプレーンテキストで入れ直されるので、書式が失われる選択か。
+    /// リンク・添付、または範囲によって属性が違う (一部だけ太字など) ものは true。属性が全体で一様なら false。
+    static func hasRichFormatting(_ text: NSAttributedString) -> Bool {
+        guard text.length > 0 else { return false }
+        let whole = NSRange(location: 0, length: text.length)
+        var rich = false
+        text.enumerateAttributes(in: whole, options: []) { attributes, _, stop in
+            if attributes[.link] != nil || attributes[.attachment] != nil {
+                rich = true
+                stop.pointee = true
+            }
+        }
+        if rich { return true }
+        var range = NSRange(location: 0, length: 0)
+        _ = text.attributes(at: 0, longestEffectiveRange: &range, in: whole)
+        return range.length != text.length
+    }
+
     /// 選択した文字のひらがなの読み。再変換できない文字 (英数字・記号・空白・改行を含む、長すぎる) や、読みが取れないときは nil。
     ///
     /// - かな・カタカナ: ひらがなにするだけ (長音 ー と中黒 ・ はそのまま)。
