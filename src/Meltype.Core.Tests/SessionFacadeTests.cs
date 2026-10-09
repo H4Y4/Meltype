@@ -209,7 +209,10 @@ internal static class SessionFacadeTests
     public static void Reconvert_EnterCommitsTheConvertedText()
     {
         var session = Create();
-        var shown = session.Reconvert("今日", "きょう").View!;
+        session.Reconvert("今日", "きょう");
+        // 元の文字のままなら確定しないので、候補を 1 つ選び直してから確定する
+        var shown = session.HandleKey(VirtualKeys.Down, null, false, false, false, false).View!;
+        Assert.True(shown.Text != "今日", "候補を選び直した");
         var enter = Type(session, "\n")[0];
         Assert.True(enter.Consumed, "Enter は確定に使う");
         Assert.Equal(shown.Text, enter.Commits.Single().Text);
@@ -237,7 +240,10 @@ internal static class SessionFacadeTests
         var view = session.Reconvert("日本語", "にっぽんご").View!;
         Assert.Equal("日本語", view.Text);
         Assert.Equal("ニッポン語", view.Candidates[1]);
-        Assert.Equal("日本語", Type(session, "\n")[0].Commits.Single().Text);
+        // 元の文字のまま確定したときは確定を返さない (呼び出し側が元の文字を入れ直す。取り消しと同じ)
+        var enter = Type(session, "\n")[0];
+        Assert.Equal(0, enter.Commits.Count);
+        Assert.True(enter.View is null && !session.IsComposing, "変換ボックスを閉じる");
     }
 
     [Test]
@@ -275,7 +281,8 @@ internal static class SessionFacadeTests
     public static void Reconvert_FocusLossCommitsTheReplacement()
     {
         var session = Create();
-        var shown = session.Reconvert("今日", "きょう").View!;
+        session.Reconvert("今日", "きょう");
+        var shown = session.HandleKey(VirtualKeys.Down, null, false, false, false, false).View!;
         var commit = session.CommitPending();
         Assert.Equal(shown.Text, commit.Commits.Single().Text);
         Assert.True(!session.IsComposing, "確定したら変換中ではない");

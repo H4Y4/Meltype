@@ -324,7 +324,10 @@ internal static class CompositionTests
         Assert.True(k.Host.View?.Converting == true, "選択文字の候補を表示する");
         Assert.True(ReferenceEquals(selection, k.Host.Selection), "確定前は選択文字を維持する");
         Assert.Equal(0, k.Host.Output.Count);
+        // 再変換の直後は元の文字を選んでいる (そのまま確定しても置き換えない) ので、候補を選び直してから確定する
+        k.Press(VirtualKeys.Down);
         var candidate = k.Showing;
+        Assert.True(candidate != "今日", "候補を選び直した");
         k.Press(VirtualKeys.Return);
         Assert.Equal(candidate, k.Host.Document);
         Assert.True(k.Host.Events.Any(e => e.StartsWith("replace:今日:")), "選択範囲を置き換える");
@@ -343,7 +346,10 @@ internal static class CompositionTests
         Assert.Equal(0, k.Host.View!.SelectedIndex);
         Assert.Equal("ニッポン語", k.Host.View!.Candidates[1], "変換エンジンの結果は 2 番目");
         k.Press(VirtualKeys.Return);
-        Assert.Equal("日本語", k.Host.Document);
+        Assert.True(!k.Host.Events.Any(e => e.StartsWith("replace:")), "元の文字のまま確定したら選択範囲を置き換えない");
+        Assert.Equal("", k.Host.Document);
+        Assert.True(!k.Gate.IsCaptured, "確定後はキーを解放する");
+        // 学習はスレッドプールで非同期に行うので、学習されないことを確かめるには少し待つ必要がある (待たないと、学習されても見逃す)。
         Thread.Sleep(200);
         Assert.Equal(0, converter.Learned.Count, "元の文字のまま確定したら学習しない");
 
@@ -372,7 +378,7 @@ internal static class CompositionTests
         Assert.True(candidates.Contains("ひるか") && candidates.Contains("ヒルカ"), string.Join(",", candidates));
         Assert.Equal(candidates.Count, candidates.Distinct().Count(), "重複しない");
         k.Press(VirtualKeys.Return);
-        Assert.Equal("日留香", k.Host.Document);
+        Assert.True(!k.Host.Events.Any(e => e.StartsWith("replace:")), "元の文字のまま確定したら選択範囲を置き換えない");
     }
 
     [Test]
@@ -384,12 +390,29 @@ internal static class CompositionTests
         Assert.Equal("昼か", k.Showing);
         Assert.Equal("昼", k.Host.View!.Candidates[0], "分けたまま (先頭は文節の結果)");
         k.Press(VirtualKeys.Return);
-        Assert.Equal("昼か", k.Host.Document);
+        Assert.True(!k.Host.Events.Any(e => e.StartsWith("replace:")), "元の文字のまま確定したら選択範囲を置き換えない");
         k = new Keyboard();
         k.Host.Selection = new ReconversionSelection("今日", "きょう");
         k.Press(VirtualKeys.Convert);
         Assert.Equal("今日", k.Host.View!.Candidates[0]);
         Assert.Equal(1, k.Host.View!.Candidates.Count(c => c == "今日"), "元の文字を重ねて入れない");
+    }
+
+    [Test]
+    public static void Reconversion_SameTextAsSelectionIsNotReplaced()
+    {
+        // 変換結果が元の文字と同じまま確定したときも、選択範囲は触らない (書式を消さない。Windows では上書きしない、Mac では取り消しと同じ)。
+        var k = new Keyboard();
+        k.Host.Selection = new ReconversionSelection("今日", "きょう");
+        k.Press(VirtualKeys.Convert);
+        Assert.Equal("今日", k.Showing);
+        k.Press(VirtualKeys.Return);
+        Assert.True(!k.Host.Events.Any(e => e.StartsWith("replace:")), "同じ文字では置き換えない");
+        Assert.Equal(0, k.Host.Output.Count);
+        Assert.True(!k.Gate.IsCaptured, "取り消しと同じくキーを解放する");
+        k.Type("kana");
+        k.Press(VirtualKeys.Return);
+        Assert.True(k.Host.Output.Count > 0, "そのあとも通常入力できる");
     }
 
     [Test]

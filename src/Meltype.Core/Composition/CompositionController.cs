@@ -251,7 +251,6 @@ public sealed class CompositionController
     private long _lastCommitTime = long.MinValue / 2;
     private int _compositionId;
     private ReconversionSelection? _reconversion;
-    private bool _reconversionKept;
 
     // 予測変換: 打ちかけの読み・英字の続きの候補と、Tab で選んでいるもの (-1 なら選んでいない)。
     private IReadOnlyList<string> _predictions = [];
@@ -418,7 +417,6 @@ public sealed class CompositionController
     private void ClearComposition()
     {
         _reconversion = null;
-        _reconversionKept = false;
         ++_compositionId;
         _text.Clear();
         _converting = false;
@@ -1355,7 +1353,7 @@ public sealed class CompositionController
     /// 読みの推定がずれる語 (日本語 → にっぽんご、私 → わたくし) は、変換結果にも候補にも元の文字が出ず、Enter で別の文字に変わってしまうため。
     /// 変換結果が元の文字と同じなら何もしない。文節が 1 つならその候補の先頭に元の文字を入れ、
     /// 2 つ以上なら読み全体を 1 つの文節にまとめる (区切りを変えたいときは Shift+← で縮められる)。
-    /// 元の文字のまま確定したときは、変換エンジンに覚えさせない (_reconversionKept。Changed は false のまま)。
+    /// 元の文字のまま確定したときは、選択範囲を置き換えず、変換エンジンにも覚えさせない (Commit)。
     /// </summary>
     private void KeepReconversionOriginal(ReconversionSelection selection)
     {
@@ -1369,7 +1367,6 @@ public sealed class CompositionController
             _clauses = [new Clause(reading, false, Distinct([selection.Text, converted, .. JapaneseCandidates(reading, null)]))];
         }
         _selectedClause = 0;
-        _reconversionKept = true;
     }
 
     private static void Prefer(Clause clause, string text)
@@ -1674,10 +1671,12 @@ public sealed class CompositionController
         var chosen = converting ? _clauses.Any(c => c.Changed) : _text.Mode != DisplayMode.Auto;
         if (_reconversion is { } selection)
         {
-            if (_host.TryReplaceSelection(selection, text + suffix))
+            // 元の文字のまま確定したときは、選択範囲を置き換えず、学習もしない (Esc の取り消しと同じ)。
+            // 同じ文字で上書きすると、書式 (太字・リンクなど) が消えるおそれがある。
+            // Windows では選択範囲が確定まで触られていないのでそのまま残り、Mac では変換中の文字が消えて、呼び出し側が元の文字を入れ直す。
+            if (text + suffix != selection.Text && _host.TryReplaceSelection(selection, text + suffix))
             {
-                // 元の文字のまま確定したときは学習しない (候補を選び直したら学習する)。
-                if (converting && !(_reconversionKept && text == selection.Text && !_clauses.Any(c => c.Changed))) Learn();
+                if (converting) Learn();
                 ResetContext();
                 ReconversionCommitted?.Invoke();
             }

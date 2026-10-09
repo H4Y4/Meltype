@@ -183,9 +183,11 @@ internal static unsafe class NativeBoundaryTests
         using var started = native.Reconvert("今日", "きょう");
         Assert.True(started.RootElement.GetProperty("consumed").GetBoolean(), "再変換を始めたらキーは使う");
         Assert.Equal(0, started.RootElement.GetProperty("commits").GetArrayLength());
-        var view = started.RootElement.GetProperty("view");
-        Assert.True(view.GetProperty("converting").GetBoolean(), "変換中の表示を返す");
-        var shown = view.GetProperty("text").GetString();
+        Assert.True(started.RootElement.GetProperty("view").GetProperty("converting").GetBoolean(), "変換中の表示を返す");
+        // 元の文字のままなら確定しないので、候補を 1 つ選び直してから確定する
+        using var down = native.Key('\0', VirtualKeys.Down);
+        var shown = down.RootElement.GetProperty("view").GetProperty("text").GetString();
+        Assert.True(shown != "今日", "候補を選び直した");
         using var enter = native.Key('\r', VirtualKeys.Return);
         var commits = enter.RootElement.GetProperty("commits");
         Assert.Equal(1, commits.GetArrayLength());
