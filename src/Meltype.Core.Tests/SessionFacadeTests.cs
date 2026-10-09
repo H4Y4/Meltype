@@ -357,4 +357,73 @@ internal static class SessionFacadeTests
         session.Direct = false;
         Assert.True(Type(session, "@", before: "")[0].Consumed, "taro と打った後の @ は変換ボックスへ");
     }
+
+    private static MeltypeSession CreateMac() =>
+        new(CompositionTests.Detector, new CompositionTests.FakeConverter(), new CompositionOptions { ControlKeys = () => ControlKeyStyle.Mac }, () => new Settings { ControlKeys = ControlKeyStyle.Mac });
+
+    [Test]
+    public static void MacControl_Arrows_InEnglishWord_CommitThenPassToApp()
+    {
+        // 英語と判定した語の途中の Ctrl+N などは割り当てなし: 確定して、キーはアプリへ (↓ にならず、文字 n も変換ボックスに入らない)。
+        // Linux (IBus/fcitx5) は Ctrl+N でも文字 'n' を渡す
+        foreach (var letter in "NPBFWOI")
+        {
+            var session = CreateMac();
+            Type(session, "hello");
+            Assert.True(session.IsComposing, "hello を入力中");
+            var result = session.HandleKey(letter, char.ToLowerInvariant(letter), false, true, false, false);
+            Assert.True(!result.Consumed, $"Ctrl+{letter} はアプリへ渡す: {result.View?.Text} [{string.Join(",", result.Commits.Select(c => c.Text))}]");
+            Assert.Equal("hello", string.Concat(result.Commits.Select(c => c.Text)), $"Ctrl+{letter}: 確定する");
+            Assert.True(!session.IsComposing, $"Ctrl+{letter}: n などが変換ボックスに入らない");
+            Assert.True(result.View is null, "変換ボックスは閉じる");
+            // 続けて Ctrl+N / Ctrl+C を押しても、そのままアプリへ
+            Assert.True(!session.HandleKey(letter, char.ToLowerInvariant(letter), false, true, false, false).Consumed, "続けて押してもアプリへ");
+            Assert.True(!session.HandleKey('C', 'c', false, true, false, false).Consumed, "Ctrl+C もアプリへ");
+        }
+    }
+
+    [Test]
+    public static void MacControl_Arrows_KanaAndConverting_AreUsed()
+    {
+        // かな入力中 (変換前) と変換中の Ctrl+N/B/F は今までどおり使い切る
+        foreach (var letter in "NBF")
+        {
+            var session = CreateMac();
+            Type(session, "tanniwotoru");
+            var before = session.HandleKey(letter, char.ToLowerInvariant(letter), false, true, false, false);
+            Assert.True(before.Consumed, $"変換前の Ctrl+{letter}: {before.View?.Text} {session.IsComposing}");
+            Assert.True(before.View?.Converting == true, $"変換前の Ctrl+{letter} で文節の選択に入る");
+        }
+        var converting = CreateMac();
+        Type(converting, "egao ");
+        Assert.True(converting.HandleKey('N', 'n', false, true, false, false).Consumed, "変換中の Ctrl+N");
+        Assert.True(converting.IsComposing, "変換中のまま");
+        // Ctrl+V / Ctrl+R は変換中に PageDown / PageUp を押したのと同じ
+        foreach (var (page, letter) in new[] { (0x22, 'V'), (0x21, 'R') })
+        {
+            var plain = Create();
+            Type(plain, "egao ");
+            var expected = plain.HandleKey(page, null, false, false, false, false);
+            var mac = CreateMac();
+            Type(mac, "egao ");
+            var actual = mac.HandleKey(letter, char.ToLowerInvariant(letter), false, true, false, false);
+            Assert.Equal(expected.Consumed, actual.Consumed, $"Ctrl+{letter}");
+            Assert.Equal(plain.IsComposing, mac.IsComposing, $"Ctrl+{letter}");
+            Assert.Equal(expected.View?.SelectedIndex, actual.View?.SelectedIndex, $"Ctrl+{letter}");
+        }
+    }
+
+    [Test]
+    public static void MacControl_ShiftedSymbols_AreNotUsed()
+    {
+        // 英字以外のキーの Shift 込みの文字: Ctrl+Shift+' (US) の " と Ctrl+Shift+; (JIS) の + は割り当てなし。Ctrl+: (JIS) は半角英字
+        foreach (var (vk, ch) in new[] { (0xDE, '"'), (0xBB, '+'), (0xBA, ':') })
+        {
+            var session = CreateMac();
+            Type(session, "aiueo");
+            var result = session.HandleKey(vk, ch, shift: ch != ':', control: true, false, false);
+            if (ch == ':') Assert.True(result.Consumed && session.IsComposing, $"Shift なしの Ctrl+: は半角英字 {result.Consumed} {session.IsComposing} {result.View?.Text}");
+            else Assert.True(!result.Consumed, $"Ctrl+Shift+{ch} はアプリ (英数への切り替え) に回す");
+        }
+    }
 }

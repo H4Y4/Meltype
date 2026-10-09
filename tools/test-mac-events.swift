@@ -115,6 +115,12 @@ struct EventTests {
   check("F6 override before marks") { controller,client in
    type(controller,client,"e");_=key(controller,client,"",code:UInt16(kVK_F6));_=key(controller,client,"\u{0301}\u{0300}");equal(client.document,"え\u{0301}\u{0300}")
   }
+  check("F8 half-width katakana") { controller,client in
+   // 実機では F8 の characters に U+F70B が入るが、main にはそれが変換中の文字に混ざる既知の不具合があり
+   // (fix/mac-function-key-chars で修正中)、このテストでは characters を空にして送る。
+   type(controller,client,"aiueo");precondition(key(controller,client,"",code:UInt16(kVK_F8)),"F8 must be consumed")
+   equal(client.marked,"ｱｲｳｴｵ")
+  }
   check("F9 override") { controller,client in
    type(controller,client,"@kuraido");_=key(controller,client,"",code:UInt16(kVK_F9));_=key(controller,client,"\r",code:UInt16(kVK_Return));equal(client.document,"＠ｋｕｒａｉｄｏ")
   }
@@ -160,6 +166,82 @@ struct EventTests {
   check("Command shortcut commits once") { controller,client in
    type(controller,client,"@kuraido");precondition(!key(controller,client,"a",flags:.command));equal(client.document,"@kuraido");equal(client.marked,"")
   }
+  // 入力中の Ctrl キー (設定 ControlKeys)。設定は入力欄ごとの本体を作るときに読むので、controller を作る前に config.json を書き換える。
+  // Control を押すと characters は制御文字になり (Ctrl+J → "\n")、Shift も無視される (US 配列の Ctrl+: は ";")。charactersIgnoringModifiers は Shift を含む (":")。
+  func ctrl(_ controller:MeltypeInputController,_ client:EventClient,_ chars:String,_ ignoring:String,code:Int,shift:Bool=false)->Bool {
+   let flags:NSEvent.ModifierFlags = shift ? [.control,.shift] : [.control]
+   let event=NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:flags,timestamp:0,windowNumber:0,context:nil,characters:chars,charactersIgnoringModifiers:ignoring,isARepeat:false,keyCode:UInt16(code))!
+   return controller.handle(event,client:client)
+  }
+  guard let dataDirectory=ProcessInfo.processInfo.environment["MELTYPE_DATA_DIR"] else {fatalError("MELTYPE_DATA_DIR is required")}
+  let configURL=URL(fileURLWithPath:dataDirectory).appendingPathComponent("config.json")
+  let originalConfig=try? Data(contentsOf:configURL)
+  func writeControlKeys(_ style:String?) {
+   var object=(originalConfig.flatMap { try? JSONSerialization.jsonObject(with:$0) } as? [String:Any]) ?? [:]
+   if let style { object["ControlKeys"]=style }
+   try! JSONSerialization.data(withJSONObject:object).write(to:configURL)
+  }
+  writeControlKeys(nil)
+  check("Ctrl+J without a setting is not assigned (ATOK style)") { controller,client in
+   type(controller,client,"aiueo")
+   precondition(!ctrl(controller,client,"\n","j",code:kVK_ANSI_J),"Ctrl+J must pass to the app")
+   equal(client.document,"あいうえお"); equal(client.marked,"")
+  }
+  writeControlKeys("Mac")
+  check("Mac style Ctrl+J / Ctrl+K / Ctrl+L") { controller,client in
+   type(controller,client,"aiueo")
+   precondition(ctrl(controller,client,"\u{0B}","k",code:kVK_ANSI_K),"Ctrl+K must be consumed"); equal(client.marked,"アイウエオ")
+   precondition(ctrl(controller,client,"\u{0C}","l",code:kVK_ANSI_L),"Ctrl+L must be consumed"); equal(client.marked,"ａｉｕｅｏ")
+   precondition(ctrl(controller,client,"\n","j",code:kVK_ANSI_J),"Ctrl+J must be consumed"); equal(client.marked,"あいうえお")
+   equal(client.document,"")
+  }
+  check("Mac style Ctrl+; half-width alphanumerics (not katakana)") { controller,client in
+   type(controller,client,"aiueo")
+   precondition(ctrl(controller,client,";",";",code:kVK_ANSI_Semicolon),"Ctrl+; must be consumed"); equal(client.marked,"aiueo")
+   equal(client.document,"")
+  }
+  check("Mac style Ctrl+: (JIS) and Ctrl+' half-width alphanumerics") { controller,client in
+   type(controller,client,"aiueo")
+   _=ctrl(controller,client,"\n","j",code:kVK_ANSI_J)
+   // JIS 配列の Ctrl+: は Quote のキー (0x27): characters は "'"、charactersIgnoringModifiers は ":"
+   precondition(ctrl(controller,client,"'",":",code:kVK_ANSI_Quote),"Ctrl+: (JIS) must be consumed"); equal(client.marked,"aiueo")
+   _=ctrl(controller,client,"\n","j",code:kVK_ANSI_J); equal(client.marked,"あいうえお")
+   precondition(ctrl(controller,client,"'","'",code:kVK_ANSI_Quote),"Ctrl+' must be consumed"); equal(client.marked,"aiueo")
+   equal(client.document,"")
+  }
+  // 英字への切り替えのキー (US 配列の Ctrl+Shift+'、JIS 配列の Ctrl+Shift+;) は割り当てが無く、本体は使わない
+  // (英数への切り替えは OS 側の処理に回る)。characters は Shift を無視する。
+  check("Mac style Ctrl+Shift+' (US) is not consumed") { controller,client in
+   type(controller,client,"aiueo")
+   precondition(!ctrl(controller,client,"'","\"",code:kVK_ANSI_Quote,shift:true),"Ctrl+Shift+' (US) must pass")
+   equal(client.document,"あいうえお"); equal(client.marked,"")
+  }
+  check("Mac style Ctrl+Shift+; (JIS) is not consumed") { controller,client in
+   type(controller,client,"aiueo")
+   precondition(!ctrl(controller,client,";","+",code:kVK_ANSI_Semicolon,shift:true),"Ctrl+Shift+; (JIS) must pass")
+   equal(client.document,"あいうえお"); equal(client.marked,"")
+  }
+  check("Mac style Ctrl+Shift+; (US, Ctrl+:) is not consumed") { controller,client in
+   type(controller,client,"aiueo")
+   precondition(!ctrl(controller,client,";",":",code:kVK_ANSI_Semicolon,shift:true),"Ctrl+: (US) must pass")
+   equal(client.document,"あいうえお"); equal(client.marked,"")
+  }
+  check("Mac style Ctrl+N / Ctrl+F in an English word pass to the app") { controller,client in
+   type(controller,client,"hello")
+   precondition(!ctrl(controller,client,"\u{0E}","n",code:kVK_ANSI_N),"Ctrl+N must pass to the app")
+   equal(client.document,"hello"); equal(client.marked,"")
+   type(controller,client,"hello")
+   precondition(!ctrl(controller,client,"\u{06}","f",code:kVK_ANSI_F),"Ctrl+F must pass to the app")
+   equal(client.document,"hellohello"); equal(client.marked,"")
+  }
+  check("Mac style Ctrl+U is not assigned and Ctrl+N passes when empty") { controller,client in
+   precondition(!ctrl(controller,client,"\u{0E}","n",code:kVK_ANSI_N),"Ctrl+N with no input must pass to the app")
+   type(controller,client,"aiueo")
+   precondition(!ctrl(controller,client,"\u{15}","u",code:kVK_ANSI_U),"Ctrl+U must pass to the app")
+   equal(client.document,"あいうえお"); equal(client.marked,"")
+  }
+  if let originalConfig { try! originalConfig.write(to:configURL) } else { try? FileManager.default.removeItem(at:configURL) }
+
   #if REAL_CONVERTER
   let converter=MeltypeConverter.shared
   let candidates=converter.candidates(for:"きょう")

@@ -89,8 +89,15 @@ final class MeltypeInputController: IMKInputController {
         // 文字なし (0) として vk だけを渡す。本体側 (Exports.cs の IsMacFunctionKeyScalar) と同じ範囲。
         // その外の私用領域 (U+F8FF の Apple ロゴなど) は、ふつうの文字として渡す。
         let functionKeyRange: ClosedRange<UInt32> = 0xF700...0xF747
-        let character: Int32 = scalars.count == 1 && !functionKeyRange.contains(scalars[0].value) ? Int32(scalars[0].value) : 0
+        var character: Int32 = scalars.count == 1 && !functionKeyRange.contains(scalars[0].value) ? Int32(scalars[0].value) : 0
         let flags = event.modifierFlags
+        // Control を押していると characters は Shift を無視する (US 配列の Ctrl+: が ";" で届く)。
+        // Mac 式の Ctrl+; / Ctrl+: / Ctrl+' は文字で見分けるので、英字以外の記号・数字のキーは Shift を含めた文字を渡す
+        // (US 配列の Ctrl+Shift+' は ["]、JIS 配列の Ctrl+Shift+; は [+] になり、割り当てが無いので OS の処理に回る)。
+        if flags.contains(.control), let base = event.charactersIgnoringModifiers?.unicodeScalars, base.count == 1,
+           let scalar = base.first, (0x21...0x7E).contains(scalar.value), !CharacterSet.letters.contains(scalar) {
+            character = Int32(scalar.value)
+        }
         var modifiers: Int32 = 0
         if flags.contains(.shift) { modifiers |= 1 }
         if flags.contains(.control) { modifiers |= 2 }

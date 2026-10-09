@@ -28,7 +28,7 @@ enum KeyMapping {
         case kVK_PageDown: return 0x22
         case kVK_F6: return 0x75                // ひらがな
         case kVK_F7: return 0x76                // カタカナ
-        case kVK_F8: return 0x77
+        case kVK_F8: return 0x77                // 半角カタカナ
         case kVK_F9: return 0x78                // 全角英数
         case kVK_F10: return 0x79               // 半角英数
         default: break
