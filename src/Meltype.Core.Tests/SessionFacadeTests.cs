@@ -230,6 +230,17 @@ internal static class SessionFacadeTests
     }
 
     [Test]
+    public static void Reconvert_StartsWithTheOriginalTextWhenReadingDoesNotConvertToIt()
+    {
+        // 読みの推定がずれて (日本語 → にっぽんご) 変換結果が元の文字にならなくても、元の文字が選ばれている。
+        var session = Create();
+        var view = session.Reconvert("日本語", "にっぽんご").View!;
+        Assert.Equal("日本語", view.Text);
+        Assert.Equal("ニッポン語", view.Candidates[1]);
+        Assert.Equal("日本語", Type(session, "\n")[0].Commits.Single().Text);
+    }
+
+    [Test]
     public static void Reconvert_EscapeEndsWithoutCommit()
     {
         var session = Create();

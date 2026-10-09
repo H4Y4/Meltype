@@ -155,6 +155,17 @@ struct EventTests {
     type(controller,client,"ka");_=key(controller,client,"\r",code:UInt16(kVK_Return));precondition(client.document.contains("か"),"typing works after cancel")
    }
   }
+  // 読みの推定がずれる語 (日本語 → にっぽんご、私 → わたくし、お兄さん → おあにさん) でも、再変換の直後は元の文字が選ばれていて、そのまま Enter なら文書は変わらない。
+  // 読みの推定・変換エンジンの結果には依存しない。
+  for original in ["日本語","私","お兄さん","明日"] {
+   check("reconversion Enter keeps the original text (\(original))") { controller,client in
+    client.document="さっき"+original+"は晴れ"; client.selection=NSRange(location:3,length:(original as NSString).length)
+    precondition(reconvert(controller,client),"must start")
+    equal(client.marked,original)
+    precondition(key(controller,client,"\r",code:UInt16(kVK_Return)),"Enter must commit")
+    equal(client.document,"さっき"+original+"は晴れ"); equal(client.marked,"")
+   }
+  }
   check("reconversion Backspace until empty restores selection text") { controller,client in
    client.document="今日は"; client.selection=NSRange(location:0,length:2)
    precondition(reconvert(controller,client),"must start")

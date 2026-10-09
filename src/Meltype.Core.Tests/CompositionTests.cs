@@ -17,6 +17,8 @@ internal static class CompositionTests
         {
             "きょう" => "今日",
             "にほんご" => "日本語",
+            // 読みの推定がずれた再変換 (選択「日本語」を にっぽんご と読んだ)
+            "にっぽんご" => "ニッポン語",
             "こんにちは" => "今日は",
             "きょうは" => "今日は",
             "でけんさく" => "で検索",
@@ -327,6 +329,67 @@ internal static class CompositionTests
         Assert.Equal(candidate, k.Host.Document);
         Assert.True(k.Host.Events.Any(e => e.StartsWith("replace:今日:")), "選択範囲を置き換える");
         Assert.True(!k.Gate.IsCaptured, "確定後はキーを解放する");
+    }
+
+    [Test]
+    public static void Reconversion_ShowsOriginalWhenReadingDoesNotConvertToIt()
+    {
+        // 読みの推定がずれて (日本語 → にっぽんご) 変換結果が元の文字にならなくても、元の文字を選んだ状態から始める。
+        var converter = new LearningConverter();
+        var k = new Keyboard(converter: converter);
+        k.Host.Selection = new ReconversionSelection("日本語", "にっぽんご");
+        k.Press(VirtualKeys.Convert);
+        Assert.Equal("日本語", k.Showing);
+        Assert.Equal(0, k.Host.View!.SelectedIndex);
+        Assert.Equal("ニッポン語", k.Host.View!.Candidates[1], "変換エンジンの結果は 2 番目");
+        k.Press(VirtualKeys.Return);
+        Assert.Equal("日本語", k.Host.Document);
+        Thread.Sleep(200);
+        Assert.Equal(0, converter.Learned.Count, "元の文字のまま確定したら学習しない");
+
+        // 候補を選び直して確定したら今までどおり学習する
+        k = new Keyboard(converter: converter);
+        k.Host.Selection = new ReconversionSelection("日本語", "にっぽんご");
+        k.Press(VirtualKeys.Convert);
+        k.Press(VirtualKeys.Down);
+        Assert.Equal("ニッポン語", k.Showing);
+        k.Press(VirtualKeys.Return);
+        Assert.Equal("ニッポン語", k.Host.Document);
+        for (var i = 0; i < 100 && converter.Learned.Count == 0; i++) Thread.Sleep(10);
+        Assert.Equal("にっぽんご=ニッポン語", converter.Learned.SingleOrDefault() ?? "(なし)");
+    }
+
+    [Test]
+    public static void Reconversion_MergesClausesAndPutsOriginalFirst()
+    {
+        // 変換結果が複数の文節に分かれて元の文字にならないときは、読み全体を 1 つの文節にする。
+        var k = new Keyboard();
+        k.Host.Selection = new ReconversionSelection("日留香", "ひるか");
+        k.Press(VirtualKeys.Convert);
+        Assert.Equal("日留香", k.Showing);
+        var candidates = k.Host.View!.Candidates;
+        Assert.Equal("日留香,昼か", string.Join(",", candidates.Take(2)));
+        Assert.True(candidates.Contains("ひるか") && candidates.Contains("ヒルカ"), string.Join(",", candidates));
+        Assert.Equal(candidates.Count, candidates.Distinct().Count(), "重複しない");
+        k.Press(VirtualKeys.Return);
+        Assert.Equal("日留香", k.Host.Document);
+    }
+
+    [Test]
+    public static void Reconversion_KeepsPlainBehaviorWhenReadingConvertsToOriginal()
+    {
+        var k = new Keyboard();
+        k.Host.Selection = new ReconversionSelection("昼か", "ひるか");
+        k.Press(VirtualKeys.Convert);
+        Assert.Equal("昼か", k.Showing);
+        Assert.Equal("昼", k.Host.View!.Candidates[0], "分けたまま (先頭は文節の結果)");
+        k.Press(VirtualKeys.Return);
+        Assert.Equal("昼か", k.Host.Document);
+        k = new Keyboard();
+        k.Host.Selection = new ReconversionSelection("今日", "きょう");
+        k.Press(VirtualKeys.Convert);
+        Assert.Equal("今日", k.Host.View!.Candidates[0]);
+        Assert.Equal(1, k.Host.View!.Candidates.Count(c => c == "今日"), "元の文字を重ねて入れない");
     }
 
     [Test]

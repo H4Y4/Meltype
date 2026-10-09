@@ -251,6 +251,7 @@ public sealed class CompositionController
     private long _lastCommitTime = long.MinValue / 2;
     private int _compositionId;
     private ReconversionSelection? _reconversion;
+    private bool _reconversionKept;
 
     // 予測変換: 打ちかけの読み・英字の続きの候補と、Tab で選んでいるもの (-1 なら選んでいない)。
     private IReadOnlyList<string> _predictions = [];
@@ -417,6 +418,7 @@ public sealed class CompositionController
     private void ClearComposition()
     {
         _reconversion = null;
+        _reconversionKept = false;
         ++_compositionId;
         _text.Clear();
         _converting = false;
@@ -696,6 +698,7 @@ public sealed class CompositionController
             foreach (var kana in selection.Reading) _text.AppendKana(kana, kana);
             _text.Mode = DisplayMode.Hiragana;
             StartConversion(preferJapanese: true);
+            KeepReconversionOriginal(selection);
             return;
         }
         // 日本語入力のときの Shift+Space は全角スペース (Microsoft IME と同じ: issue #24)。英数状態では普通の空白のまま。
@@ -1347,6 +1350,28 @@ public sealed class CompositionController
 
     private static bool IsSymbolOnly(string text) => text.Length > 0 && !text.Any(char.IsLetterOrDigit);
 
+    /// <summary>
+    /// 再変換の直後は、元の文字を選んだ状態にする (macOS 標準の IME と同じ。そのまま Enter なら何も変わらない)。
+    /// 読みの推定がずれる語 (日本語 → にっぽんご、私 → わたくし) は、変換結果にも候補にも元の文字が出ず、Enter で別の文字に変わってしまうため。
+    /// 変換結果が元の文字と同じなら何もしない。文節が 1 つならその候補の先頭に元の文字を入れ、
+    /// 2 つ以上なら読み全体を 1 つの文節にまとめる (区切りを変えたいときは Shift+← で縮められる)。
+    /// 元の文字のまま確定したときは、変換エンジンに覚えさせない (_reconversionKept。Changed は false のまま)。
+    /// </summary>
+    private void KeepReconversionOriginal(ReconversionSelection selection)
+    {
+        if (!_converting || _clauses.Count == 0) return;
+        var converted = string.Concat(_clauses.Select(c => c.Text));
+        if (converted == selection.Text) return;
+        if (_clauses.Count == 1) Prefer(_clauses[0], selection.Text);
+        else
+        {
+            var reading = string.Concat(_clauses.Select(c => c.Reading));
+            _clauses = [new Clause(reading, false, Distinct([selection.Text, converted, .. JapaneseCandidates(reading, null)]))];
+        }
+        _selectedClause = 0;
+        _reconversionKept = true;
+    }
+
     private static void Prefer(Clause clause, string text)
     {
         clause.Candidates.Remove(text);
@@ -1651,7 +1676,8 @@ public sealed class CompositionController
         {
             if (_host.TryReplaceSelection(selection, text + suffix))
             {
-                if (converting) Learn();
+                // 元の文字のまま確定したときは学習しない (候補を選び直したら学習する)。
+                if (converting && !(_reconversionKept && text == selection.Text && !_clauses.Any(c => c.Changed))) Learn();
                 ResetContext();
                 ReconversionCommitted?.Invoke();
             }
