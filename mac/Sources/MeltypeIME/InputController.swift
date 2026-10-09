@@ -69,8 +69,11 @@ final class MeltypeInputController: IMKInputController {
             break
         }
 
-        // US 配列など「英数」「かな」キーが無いキーボード向けに、macOS 標準と同じ Control+Shift+J (日本語) /
+        // US 配列など「英数」「かな」キーが無いキーボード向けに、Control+Shift+J (日本語) /
         // Control+Shift+; ・ ' (英数) でも切り替える。Command・Option が一緒のときは対象外。
+        // macOS 標準では英字への切り替えは JIS 配列が Control+Shift+;、US 配列が Control+Shift+' 。
+        // ここは物理キーで判定するので、どちらの配列でも ; ・ ' の両方で英数になる
+        // (Apple の US 配列で Control+Shift+; は半角カタカナのモードだが、Meltype には無いので英数にしている)。
         // 文字は Shift で変わる (US の Shift+; は ":") ので、物理キーの位置 (keyCode) で判定する。
         // JIS 配列の「;」キーは ANSI の ; と、「:」キーは ANSI の ' と同じ位置なので、同じ keyCode で拾える。
         // Dvorak など配列が違うときも、刻印ではなく QWERTY 上の同じ位置のキーで反応する。
