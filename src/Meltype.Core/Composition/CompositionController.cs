@@ -1351,8 +1351,9 @@ public sealed class CompositionController
     /// <summary>
     /// 再変換の直後は、元の文字を選んだ状態にする (macOS 標準の IME と同じ。そのまま Enter なら何も変わらない)。
     /// 読みの推定がずれる語 (日本語 → にっぽんご、私 → わたくし) は、変換結果にも候補にも元の文字が出ず、Enter で別の文字に変わってしまうため。
-    /// 変換結果が元の文字と同じなら何もしない。文節が 1 つならその候補の先頭に元の文字を入れ、
-    /// 2 つ以上なら読み全体を 1 つの文節にまとめる (区切りを変えたいときは Shift+← で縮められる)。
+    /// 変換結果が元の文字と同じなら何もしない。文節の区切りは保ち (← → で文節を選べる)、元の文字と食い違う文節だけ、
+    /// その文節に当たる元の文字を候補の先頭に入れる。文節と元の文字の対応が取れないときだけ、読み全体を 1 つの文節にまとめる
+    /// (区切りを変えたいときは Shift+← で縮められる)。
     /// 元の文字のまま確定したときは、選択範囲を置き換えず、変換エンジンにも覚えさせない (Commit)。
     /// </summary>
     private void KeepReconversionOriginal(ReconversionSelection selection)
@@ -1360,13 +1361,66 @@ public sealed class CompositionController
         if (!_converting || _clauses.Count == 0) return;
         var converted = string.Concat(_clauses.Select(c => c.Text));
         if (converted == selection.Text) return;
-        if (_clauses.Count == 1) Prefer(_clauses[0], selection.Text);
-        else
+        var pieces = AlignReconversion(_clauses.Select(c => c.Text).ToList(), selection.Text);
+        if (pieces is null)
         {
             var reading = string.Concat(_clauses.Select(c => c.Reading));
             _clauses = [new Clause(reading, false, Distinct([selection.Text, converted, .. JapaneseCandidates(reading, null)]))];
         }
+        else
+        {
+            for (var i = 0; i < pieces.Length; i++)
+            {
+                if (pieces[i] is { } piece) Prefer(_clauses[i], piece);
+            }
+        }
         _selectedClause = 0;
+    }
+
+    /// <summary>
+    /// 各文節の変換結果 (texts) を元の文字 (original) の中に当てはめて、文節ごとに元の文字のどの部分に当たるかを返す。
+    /// 元の文字と同じ文節は null、食い違う文節はその文節に当たる元の文字の部分。当てはめられなければ null。
+    /// 先頭と末尾から一致する文節を取り除き、残った区間が 1 文節ならそこ全体がその文節、複数なら
+    /// 区間の中に 1 回だけ出てくる文節を目印にして左右に分けて続ける (隣り合う文節が両方ずれると目印がなく、当てはめられない)。
+    /// </summary>
+    private static string?[]? AlignReconversion(IReadOnlyList<string> texts, string original)
+    {
+        var pieces = new string?[texts.Count];
+        return AlignReconversion(texts, original, 0, texts.Count, 0, original.Length, pieces) ? pieces : null;
+    }
+
+    private static bool AlignReconversion(IReadOnlyList<string> texts, string original, int first, int last, int start, int end, string?[] pieces)
+    {
+        while (first < last && start + texts[first].Length <= end &&
+               string.CompareOrdinal(original, start, texts[first], 0, texts[first].Length) == 0)
+        {
+            start += texts[first].Length;
+            first++;
+        }
+        while (first < last && end - start >= texts[last - 1].Length &&
+               string.CompareOrdinal(original, end - texts[last - 1].Length, texts[last - 1], 0, texts[last - 1].Length) == 0)
+        {
+            end -= texts[last - 1].Length;
+            last--;
+        }
+        if (first == last) return start == end;
+        if (last - first == 1)
+        {
+            if (start == end) return false;
+            pieces[first] = original[start..end];
+            return true;
+        }
+        for (var m = first; m < last; m++)
+        {
+            var anchor = texts[m];
+            if (anchor.Length == 0) continue;
+            var at = original.IndexOf(anchor, start, end - start, StringComparison.Ordinal);
+            if (at < 0 || original.IndexOf(anchor, at + 1, end - at - 1, StringComparison.Ordinal) >= 0) continue;
+            if (AlignReconversion(texts, original, first, m, start, at, pieces) &&
+                AlignReconversion(texts, original, m + 1, last, at + anchor.Length, end, pieces)) return true;
+            Array.Clear(pieces, first, last - first);
+        }
+        return false;
     }
 
     private static void Prefer(Clause clause, string text)

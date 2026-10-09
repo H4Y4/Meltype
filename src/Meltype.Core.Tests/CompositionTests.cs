@@ -39,6 +39,10 @@ internal static class CompositionTests
                 // 本物の変換エンジンは、前に同じ語があると区切りを変える (「記号等」含め、 + きごうとう → 気強盗)。
                 "きごうとう" when context?.Contains("記号等") == true => [new("き", "気"), new("ごうとう", "強盗")],
                 "きごうとう" => [new("きごう", "記号"), new("とう", "等")],
+                // 再変換: 選択「今日は良い天気」の読みを、変換エンジンが「今日はいい天気」に変換した
+                "きょうはいいてんき" => [new("きょうは", "今日は"), new("いい", "いい"), new("てんき", "天気")],
+                // 再変換: 離れた 2 つの文節がどちらも元の文字とずれる (選択「良い天気と良い日」)
+                "いいてんきといいひ" => [new("いい", "いい"), new("てんき", "天気"), new("と", "と"), new("いい", "いい"), new("ひ", "日")],
                 "あつい" => [new("あつい", "熱い")],
                 "かわ" => [new("かわ", "川")],
                 "すぱいだーまっ" => [new("すぱいだーま", "スパイダーマ"), new("っ", "っ")],
@@ -396,6 +400,48 @@ internal static class CompositionTests
         k.Press(VirtualKeys.Convert);
         Assert.Equal("今日", k.Host.View!.Candidates[0]);
         Assert.Equal(1, k.Host.View!.Candidates.Count(c => c == "今日"), "元の文字を重ねて入れない");
+    }
+
+    [Test]
+    public static void Reconversion_KeepsClausesAndPutsOriginalOnlyOnMismatchedClause()
+    {
+        // 変換結果「今日は いい 天気」が元の文字「今日は良い天気」と 1 文節だけ違うときは、文節を保ち、その文節の先頭に元の文字を入れる。
+        var k = new Keyboard();
+        k.Host.Selection = new ReconversionSelection("今日は良い天気", "きょうはいいてんき");
+        k.Press(VirtualKeys.Convert);
+        Assert.Equal("今日は良い天気", k.Showing);
+        Assert.Equal("今日は,良い,天気", string.Join(",", k.Host.View!.Clauses!), "文節の区切りを保つ");
+        k.Press(VirtualKeys.Right);
+        Assert.Equal(1, k.Host.View!.SelectedClause);
+        Assert.Equal("良い", k.Host.View!.Candidates[0], "ずれた文節の先頭は元の文字");
+        Assert.Equal(0, k.Host.View!.SelectedIndex);
+        Assert.True(k.Host.View!.Candidates.Contains("いい"), "変換エンジンの結果も残す");
+        k.Press(VirtualKeys.Return);
+        Assert.True(!k.Host.Events.Any(e => e.StartsWith("replace:")), "そのまま Enter なら元の文字のまま (置き換えない)");
+        Assert.Equal("今日は良い天気", k.Host.Selection?.Text, "選択範囲はそのまま");
+        Assert.True(!k.Gate.IsCaptured, "確定後はキーを解放する");
+
+        // ずれた文節を選び直して確定したら、その文字で置き換える
+        k = new Keyboard();
+        k.Host.Selection = new ReconversionSelection("今日は良い天気", "きょうはいいてんき");
+        k.Press(VirtualKeys.Convert);
+        k.Press(VirtualKeys.Right);
+        k.Press(VirtualKeys.Down);
+        Assert.Equal("今日はいい天気", k.Showing);
+        k.Press(VirtualKeys.Return);
+        Assert.Equal("今日はいい天気", k.Host.Document);
+    }
+
+    [Test]
+    public static void Reconversion_PutsOriginalOnEachMismatchedClause()
+    {
+        var k = new Keyboard();
+        k.Host.Selection = new ReconversionSelection("良い天気と良い日", "いいてんきといいひ");
+        k.Press(VirtualKeys.Convert);
+        Assert.Equal("良い天気と良い日", k.Showing);
+        Assert.Equal("良い,天気,と,良い,日", string.Join(",", k.Host.View!.Clauses!), "文節を保ち、ずれた文節の両方に元の文字を入れる");
+        k.Press(VirtualKeys.Return);
+        Assert.True(!k.Host.Events.Any(e => e.StartsWith("replace:")), "そのまま Enter なら置き換えない");
     }
 
     [Test]
