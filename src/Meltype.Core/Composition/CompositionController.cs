@@ -1373,7 +1373,7 @@ public sealed class CompositionController
 
     /// <summary>
     /// 文節の候補: 文の中での変換結果 → その文節だけでの変換結果 → 補助辞書の同音異義語 → ひらがな → 全角カタカナ → 半角カタカナ
-    /// → 日付・時刻 (いま・きょう) → 絵文字・顔文字 (逆順)。
+    /// → 日付・時刻 (いま・きょう・あした・こんげつ・ことし など) → 絵文字・顔文字 (逆順)。
     /// 絵文字・顔文字は最後に逆順で並べるので、変換してすぐ ↑ を押すと、いちばんよく使う絵文字 (えがお → 😊) になる (issue #133)。
     /// </summary>
     private List<string> JapaneseCandidates(string reading, string? inContext)
@@ -1391,7 +1391,7 @@ public sealed class CompositionController
         {
             if (!candidates.Contains(kana)) candidates.Add(kana);
         }
-        // 日付・時刻 (いま・なう・きょう) は、かなの後ろに出す (いつもの候補の並びは変えない)
+        // 日付・時刻 (いま・なう・きょう・あした・こんげつ・ことし など) は、かなの後ろに出す (いつもの候補の並びは変えない)
         foreach (var time in TimeCandidates(reading))
         {
             if (!candidates.Contains(time)) candidates.Add(time);
@@ -1408,16 +1408,41 @@ public sealed class CompositionController
 
     private static readonly string[] WeekDays = ["日", "月", "火", "水", "木", "金", "土"];
 
+    /// <summary>日付を表す読み → 今日から何日ずらすか (きょう・きのう・あした など)。</summary>
+    private static readonly Dictionary<string, int> DayOffsets = new()
+    {
+        ["きょう"] = 0, ["きのう"] = -1, ["おととい"] = -2, ["あした"] = 1, ["あす"] = 1, ["あさって"] = 2, ["しあさって"] = 3,
+    };
+
+    /// <summary>年月を表す読み → 今月から何か月ずらすか (こんげつ・せんげつ・らいげつ)。</summary>
+    private static readonly Dictionary<string, int> MonthOffsets = new() { ["こんげつ"] = 0, ["せんげつ"] = -1, ["らいげつ"] = 1 };
+
+    /// <summary>年を表す読み → 今年から何年ずらすか (ことし・きょねん・らいねん)。</summary>
+    private static readonly Dictionary<string, int> YearOffsets = new() { ["ことし"] = 0, ["きょねん"] = -1, ["らいねん"] = 1 };
+
     /// <summary>
-    /// いま・なう の文節に今の日時、きょう の文節に今日の日付を候補として出す (issue #208)。
+    /// いま・なう の文節に今の日時、きょう・きのう・あした などの文節にその日の日付を候補として出す (issue #208)。
     /// いま → 17:22 / 17時22分 / 午後5時22分 / 2026年10月9日(金) 17時22分 / 10月9日(金) 17:22 …
     /// きょう → 2026年10月9日 / 2026年10月9日(金) / 10月9日(金) / 2026/10/09 / 2026-10-09 / 金曜日 …
+    /// こんげつ・せんげつ・らいげつ → 2026年10月 / 10月 / 2026/10 / 2026-10、ことし・きょねん・らいねん → 2026年 / 2026。
+    /// 月末・年末をまたぐずらし方は DateTime の AddDays / AddMonths / AddYears に任せる (1/31 の らいげつ → 2 月)。
     /// </summary>
     private IEnumerable<string> TimeCandidates(string reading)
     {
         var isNow = NowReadings.Contains(reading);
-        if (!isNow && reading != "きょう") return [];
+        if (!isNow && !IsRelativeDateReading(reading)) return [];
         var now = _options.Now();
+        if (MonthOffsets.TryGetValue(reading, out var months))
+        {
+            var m = new DateTime(now.Year, now.Month, 1).AddMonths(months);
+            return [$"{m.Year}年{m.Month}月", $"{m.Month}月", $"{m.Year:D4}/{m.Month:D2}", $"{m.Year:D4}-{m.Month:D2}"];
+        }
+        if (YearOffsets.TryGetValue(reading, out var years))
+        {
+            var y = now.AddYears(years).Year;
+            return [$"{y}年", $"{y:D4}"];
+        }
+        if (DayOffsets.TryGetValue(reading, out var days)) now = now.AddDays(days);
         var day = WeekDays[(int)now.DayOfWeek];
         var date = $"{now.Year}年{now.Month}月{now.Day}日";
         var monthDay = $"{now.Month}月{now.Day}日";
@@ -1431,11 +1456,15 @@ public sealed class CompositionController
             $"{date}({day}) {time}", $"{monthDay}({day}) {time}", $"{date}({day}) {clock}", $"{slashDate} {clock}"];
     }
 
+    private static bool IsRelativeDateReading(string reading) =>
+        DayOffsets.ContainsKey(reading) || MonthOffsets.ContainsKey(reading) || YearOffsets.ContainsKey(reading);
+
     /// <summary>
-    /// 日付・時刻の候補 (いま → 17:22、きょう → 10月9日) を選んだ文節か。学習しない (覚えると、次に打ったときに古い日時が最初に出る)。
+    /// 日付・時刻の候補 (いま → 17:22、あした → 10月10日、こんげつ → 2026年10月、ことし → 2026年) を選んだ文節か。
+    /// 学習しない (覚えると、次に打ったときに古い日時が最初に出る)。
     /// </summary>
     private static bool IsDateTimeChoice(Clause clause) =>
-        (NowReadings.Contains(clause.Reading) || clause.Reading == "きょう") && (clause.Text.Any(char.IsAsciiDigit) || clause.Text.EndsWith("曜日", StringComparison.Ordinal));
+        (NowReadings.Contains(clause.Reading) || IsRelativeDateReading(clause.Reading)) && (clause.Text.Any(char.IsAsciiDigit) || clause.Text.EndsWith("曜日", StringComparison.Ordinal));
 
     /// <summary>絵文字・顔文字の候補を、最後に並べる順 (逆順: いちばんよく使うものが最後) で。</summary>
     private IEnumerable<string> EmojiBlock(string reading) =>
