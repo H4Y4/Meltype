@@ -11,6 +11,8 @@ import InputMethodKit
 @objc(MeltypeInputController)
 final class MeltypeInputController: IMKInputController {
     private var session: UnsafeMutableRawPointer?
+    /// config.json の ControlKeys が "Mac" か (セッションを作るときに読む。本体と同じタイミング)。
+    private var macControlKeys = false
     private var candidateList: [String] = []
     private var hasMarkedText = false
     private var codeInput = false
@@ -29,6 +31,7 @@ final class MeltypeInputController: IMKInputController {
     override init!(server: IMKServer!, delegate: Any!, client inputClient: Any!) {
         super.init(server: server, delegate: delegate, client: inputClient)
         session = NativeCore.shared.createSession()
+        macControlKeys = Self.readMacControlKeys()
         dictionaryObserver = DistributedNotificationCenter.default().addObserver(
             forName: Notification.Name("MeltypeUserDictionaryChanged"), object: nil, queue: .main
         ) { [weak self] _ in
@@ -36,9 +39,18 @@ final class MeltypeInputController: IMKInputController {
             self.commitComposition(self.client())
             NativeCore.shared.destroySession(self.session)
             self.session = NativeCore.shared.createSession()
+            self.macControlKeys = Self.readMacControlKeys()
             NativeCore.shared.setDirect(self.session, self.directInput)
             NativeCore.shared.setCodeInput(self.session, self.codeInput)
         }
+    }
+
+    private static func readMacControlKeys() -> Bool {
+        guard let directory = NativeCore.shared.dataDirectory,
+              let data = try? Data(contentsOf: URL(fileURLWithPath: directory).appendingPathComponent("config.json")),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let style = object["ControlKeys"] as? String else { return false }
+        return style.caseInsensitiveCompare("Mac") == .orderedSame
     }
 
     deinit {
@@ -82,6 +94,9 @@ final class MeltypeInputController: IMKInputController {
                 switchToJapanese()
                 return true
             case kVK_ANSI_Semicolon, kVK_ANSI_Quote:
+                // Mac 式の Ctrl キー (ControlKeys = Mac) で入力中のときは、US 配列の Ctrl+: (= Ctrl+Shift+;) が
+                // 半角英字への変換なので、そちらを優先して本体へ渡す。入力中でなければ英数に切り替える。
+                if macControlKeys && hasMarkedText { break }
                 switchToDirectInput(client)
                 return true
             default:

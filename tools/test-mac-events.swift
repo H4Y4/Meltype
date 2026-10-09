@@ -172,10 +172,12 @@ struct EventTests {
    precondition(!functionKey(controller,client,0xF728,code:kVK_ForwardDelete),"delete must pass through to the app")
    equal(client.document,"hello");equal(client.marked,"")
   }
-  check("F8 commits kana and passes through") { controller,client in
+  check("F8 with the real U+F70B character is half-width katakana") { controller,client in
+   // F8 が半角カタカナになったので、「F8 は未実装でアプリへ通す」だった確認を置き換えた。
+   // fix/mac-function-key-chars が入ったので、実機と同じ U+F70B が characters に入っていても文字として混ざらない。
    type(controller,client,"aiueo")
-   precondition(!functionKey(controller,client,0xF70B,code:kVK_F8),"unimplemented F8 must pass through to the app")
-   equal(client.document,"あいうえお");equal(client.marked,"")
+   precondition(functionKey(controller,client,0xF70B,code:kVK_F8),"F8 must be consumed")
+   equal(client.marked,"ｱｲｳｴｵ");equal(client.document,"")
   }
   check("Option+Shift+K Apple logo stays a character") { controller,client in
    type(controller,client,"aiueo")
@@ -265,6 +267,10 @@ struct EventTests {
    _=ctrl(controller,client,"\n","j",code:kVK_ANSI_J); equal(client.marked,"あいうえお")
    precondition(ctrl(controller,client,"'","'",code:kVK_ANSI_Quote),"Ctrl+' must be consumed"); equal(client.marked,"aiueo")
    equal(client.document,"")
+  }
+  check("Mac style: Ctrl+Shift+; switches to direct input only when nothing is being composed") { controller,client in
+   precondition(ctrl(controller,client,";",":",code:kVK_ANSI_Semicolon,shift:true),"Ctrl+Shift+; must switch when not composing")
+   type(controller,client,"ka");equal(client.document,"ka");equal(client.marked,"")
   }
   check("Mac style Ctrl+U is not assigned and Ctrl+N passes when empty") { controller,client in
    precondition(!ctrl(controller,client,"\u{0E}","n",code:kVK_ANSI_N),"Ctrl+N with no input must pass to the app")

@@ -51,6 +51,7 @@ cd mac
 - 入力中の Ctrl キーを Mac の日本語入力と同じにするには、`config.json` に `"ControlKeys": "Mac"` と書きます (書かない・`"Atok"` なら、今までどおり Ctrl+U/I/O/P)。次に入力欄を選んだときから効きます。
   Ctrl+J ひらがな / Ctrl+K カタカナ / Ctrl+L 全角英字 / Ctrl+; 半角カタカナ / Ctrl+: と Ctrl+' 半角英字 (US 配列の : は Shift+; なので、Shift の要らない Ctrl+' が使いやすい) /
   Ctrl+N 次の候補 / Ctrl+P 前の候補 / Ctrl+B 次の文節 / Ctrl+F 前の文節 / Ctrl+W・Ctrl+O 文節を伸ばす / Ctrl+I 縮める。
+  なお Ctrl+Shift+; (US 配列の Ctrl+:) は、Mac 式のときは入力中なら半角英字への変換を優先し、入力中でなければ英数への切り替えになります。
   Ctrl+B / Ctrl+F の向きは Apple のガイドの表のとおりで、実機では未確認です。入力が空のときの Ctrl+N などはアプリにそのまま渡します
 
 ## ユーザー辞書
