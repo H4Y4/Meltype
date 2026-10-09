@@ -84,8 +84,14 @@ final class MeltypeInputController: IMKInputController {
             apply(NativeCore.shared.commitBeforeExternalText(session, text: event.characters ?? ""), to: client)
             return false
         }
-        let character: Int32 = scalars.count == 1 ? Int32(scalars[0].value) : 0
+        var character: Int32 = scalars.count == 1 ? Int32(scalars[0].value) : 0
         let flags = event.modifierFlags
+        // Control を押していると characters は Shift を無視する (US 配列の Ctrl+: が ";" で届く)。
+        // Mac 式の Ctrl+; / Ctrl+: / Ctrl+' は文字で見分けるので、この 3 つだけ Shift を含めた文字を渡す。
+        if flags.contains(.control), let base = event.charactersIgnoringModifiers?.unicodeScalars, base.count == 1,
+           [";", ":", "'"].contains(base.first!) {
+            character = Int32(base.first!.value)
+        }
         var modifiers: Int32 = 0
         if flags.contains(.shift) { modifiers |= 1 }
         if flags.contains(.control) { modifiers |= 2 }

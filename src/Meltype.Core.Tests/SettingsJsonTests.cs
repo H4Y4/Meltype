@@ -48,4 +48,42 @@ internal static class SettingsJsonTests
         }
         finally { Directory.Delete(directory, recursive: true); }
     }
+
+    [Test]
+    public static void SettingsJson_ControlKeys_RoundTripsByName()
+    {
+        Assert.Equal(ControlKeyStyle.Atok, new Settings().ControlKeys, "既定は ATOK 式");
+        var directory = Path.Combine(Path.GetTempPath(), "meltype-settings-json-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var path = Path.Combine(directory, "config.json");
+            new Settings { ControlKeys = ControlKeyStyle.Mac }.Normalize().Save(path);
+            Assert.True(File.ReadAllText(path).Contains("\"ControlKeys\": \"Mac\""), "名前で保存する");
+            Assert.Equal(ControlKeyStyle.Mac, Settings.Load(path).ControlKeys);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [Test]
+    public static void SettingsJson_ControlKeys_MissingOrUnknownIsAtok()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "meltype-settings-json-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var path = Path.Combine(directory, "config.json");
+            foreach (var value in new[] { "", "\"ControlKeys\": \"Emacs\",", "\"ControlKeys\": 99,", "\"ControlKeys\": null,", "\"ControlKeys\": [1],", "\"ControlKeys\": \"\"," })
+            {
+                File.WriteAllText(path, "{ \"SettingsVersion\": 5, " + value + " \"SpaceAroundEnglish\": true }");
+                var loaded = Settings.Load(path);
+                Assert.Equal(ControlKeyStyle.Atok, loaded.ControlKeys, value);
+                Assert.True(loaded.SpaceAroundEnglish, "知らない値でも、ほかの設定は読む: " + value);
+                Assert.True(!File.Exists(path + ".broken"), "壊れたファイルとして扱わない: " + value);
+            }
+            File.WriteAllText(path, "{ \"SettingsVersion\": 5, \"ControlKeys\": \"mac\" }");
+            Assert.Equal(ControlKeyStyle.Mac, Settings.Load(path).ControlKeys, "大文字小文字は問わない");
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
 }
