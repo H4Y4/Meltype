@@ -2064,6 +2064,93 @@ internal static class CompositionTests
     }
 
     [Test]
+    public static void F8_ShowsHalfWidthKatakana()
+    {
+        // #74 #236: F8 で半角カタカナにする。濁点・半濁点は半角の ﾞ ﾟ に分け、Enter でそのまま確定する
+        var k = new Keyboard();
+        k.Type("aiueo");
+        k.Press(VirtualKeys.F8);
+        Assert.Equal("ｱｲｳｴｵ", k.Showing);
+        k.Press(VirtualKeys.Return);
+        Assert.Equal("ｱｲｳｴｵ", k.Host.Document);
+        Assert.True(!k.Host.Events.Any(e => e.StartsWith("down:77")), "F8 はアプリに送らない");
+
+        foreach (var (typed, expected) in new[] { ("kyou", "ｷｮｳ"), ("gappa", "ｶﾞｯﾊﾟ"), ("konpyu-ta", "ｺﾝﾋﾟｭｰﾀ") })
+        {
+            var each = new Keyboard();
+            each.Type(typed);
+            each.Press(VirtualKeys.F8);
+            Assert.Equal(expected, each.Showing);
+        }
+    }
+
+    [Test]
+    public static void F8_DuringConversion_ShowsWholeTextAsHalfWidthKatakana()
+    {
+        // 変換中 (Space の後) に F8 を押したら、変換をやめて全体を半角カタカナにする (F7 と同じ)
+        var k = new Keyboard();
+        k.Type("kyouha");
+        k.Press(VirtualKeys.Space);
+        k.Press(VirtualKeys.F8);
+        Assert.Equal("ｷｮｳﾊ", k.Showing);
+        k.Press(VirtualKeys.Return);
+        Assert.Equal("ｷｮｳﾊ", k.Host.Document);
+    }
+
+    [Test]
+    public static void F8_ThenF6_ReturnsToHiragana()
+    {
+        var k = new Keyboard();
+        k.Type("aiueo");
+        k.Press(VirtualKeys.F8);
+        Assert.Equal("ｱｲｳｴｵ", k.Showing);
+        k.Press(VirtualKeys.F6);
+        Assert.Equal("あいうえお", k.Showing);
+        k.Press(VirtualKeys.F8);
+        k.Press(VirtualKeys.F7);
+        Assert.Equal("アイウエオ", k.Showing);
+    }
+
+    [Test]
+    public static void F8_OnEnglishWord_ReadsAsRomaji_LikeF7()
+    {
+        // 英語と判定して英字で見せていた語も、F7 と同じくローマ字として読んだかなにする
+        var k = new Keyboard();
+        k.Type("hello");
+        Assert.Equal("hello", k.Showing);
+        k.Press(VirtualKeys.F7);
+        var katakana = k.Showing;
+        Assert.True(katakana is not null && katakana != "hello", "F7 でかなになる");
+        k.Press(VirtualKeys.F8);
+        Assert.Equal(CompositionText.ToHalfWidthKatakana(katakana!), k.Showing);
+        Assert.True(!k.Showing!.Any(char.IsAsciiLetter), "英字が残らない");
+        k.Press(VirtualKeys.Return);
+        Assert.Equal(CompositionText.ToHalfWidthKatakana(katakana!), k.Host.Document);
+    }
+
+    [Test]
+    public static void F8_Commit_LearnsLanguageAsJapanese()
+    {
+        // 英語と判定される語を F8 で半角カナにして確定したら、F6 / F7 と同じく次から日本語にする
+        var memory = new LanguageMemory(null);
+        var k = new Keyboard(languages: memory);
+        k.Type("hello");
+        k.Press(VirtualKeys.F8);
+        k.Press(VirtualKeys.Return);
+        Assert.Equal(false, memory.Get("hello"));
+    }
+
+    [Test]
+    public static void CtrlUiop_DoesNotIncludeHalfWidthKatakana()
+    {
+        // Ctrl+I は今までどおり全角カタカナ (半角カナは F8 だけ)
+        var k = new Keyboard();
+        k.Type("aiueo");
+        CtrlPress(k, 'I');
+        Assert.Equal("アイウエオ", k.Showing);
+    }
+
+    [Test]
     public static void OtherKeys_CommitFirstThenPassThroughInOrder()
     {
         var k = new Keyboard();
