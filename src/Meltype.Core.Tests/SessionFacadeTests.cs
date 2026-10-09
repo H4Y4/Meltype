@@ -195,6 +195,125 @@ internal static class SessionFacadeTests
     }
 
     [Test]
+    public static void Reconvert_StartsConversionWithoutCommitting()
+    {
+        var session = Create();
+        var result = session.Reconvert("今日", "きょう");
+        Assert.True(result.Consumed, "再変換を始めたらキーは使う");
+        Assert.True(session.IsComposing, "変換中になる");
+        Assert.True(result.View is { Converting: true } view && view.Text.Length > 0, "変換中の文字を出す");
+        Assert.Equal(0, result.Commits.Count);
+    }
+
+    [Test]
+    public static void Reconvert_EnterCommitsTheConvertedText()
+    {
+        var session = Create();
+        session.Reconvert("今日", "きょう");
+        // 元の文字のままなら確定しないので、候補を 1 つ選び直してから確定する
+        var shown = session.HandleKey(VirtualKeys.Down, null, false, false, false, false).View!;
+        Assert.True(shown.Text != "今日", "候補を選び直した");
+        var enter = Type(session, "\n")[0];
+        Assert.True(enter.Consumed, "Enter は確定に使う");
+        Assert.Equal(shown.Text, enter.Commits.Single().Text);
+        Assert.Equal(0, enter.Commits.Single().DeleteBefore);
+        Assert.True(!session.IsComposing, "確定したら変換中ではない");
+        Assert.True(enter.View is null, "変換ボックスを閉じる");
+    }
+
+    [Test]
+    public static void Reconvert_CandidateSelectionCommitsTheChosenCandidate()
+    {
+        var session = Create();
+        var view = session.Reconvert("今日", "きょう").View!;
+        Assert.True(view.Candidates.Count > 1, "候補が複数ある");
+        var chosen = session.SelectCandidate(1).View!;
+        var enter = Type(session, "\n")[0];
+        Assert.Equal(chosen.Candidates[1], enter.Commits.Single().Text);
+    }
+
+    [Test]
+    public static void Reconvert_StartsWithTheOriginalTextWhenReadingDoesNotConvertToIt()
+    {
+        // 読みの推定がずれて (日本語 → にっぽんご) 変換結果が元の文字にならなくても、元の文字が選ばれている。
+        var session = Create();
+        var view = session.Reconvert("日本語", "にっぽんご").View!;
+        Assert.Equal("日本語", view.Text);
+        Assert.Equal("ニッポン語", view.Candidates[1]);
+        // 元の文字のまま確定したときは確定を返さない (呼び出し側が元の文字を入れ直す。取り消しと同じ)
+        var enter = Type(session, "\n")[0];
+        Assert.Equal(0, enter.Commits.Count);
+        Assert.True(enter.View is null && !session.IsComposing, "変換ボックスを閉じる");
+    }
+
+    [Test]
+    public static void Reconvert_EscapeEndsWithoutCommit()
+    {
+        var session = Create();
+        session.Reconvert("今日", "きょう");
+        var escape = session.HandleKey(VirtualKeys.Escape, null, false, false, false, false);
+        Assert.True(escape.Consumed, "Esc は取り消しに使う");
+        Assert.Equal(0, escape.Commits.Count);
+        Assert.True(escape.View is null, "変換ボックスを閉じる");
+        Assert.True(!session.IsComposing, "取り消したら変換中ではない");
+        // 取り消したあとも普通に入力できる
+        Assert.True(Type(session, "kyou").All(r => r.Consumed), "次の入力は変換ボックスへ");
+    }
+
+    [Test]
+    public static void Reconvert_DeletingTheWholeReadingEndsWithoutCommit()
+    {
+        var session = Create();
+        session.Reconvert("今日", "きょう");
+        var commits = 0;
+        SessionResult? last = null;
+        for (var i = 0; i < 10 && session.IsComposing; i++)
+        {
+            last = session.HandleKey(VirtualKeys.Back, null, false, false, false, false);
+            commits += last.Commits.Count;
+        }
+        Assert.True(!session.IsComposing, "読みを全部消したら終わる");
+        Assert.Equal(0, commits);
+        Assert.True(last?.View is null, "変換ボックスを閉じる");
+    }
+
+    [Test]
+    public static void Reconvert_FocusLossCommitsTheReplacement()
+    {
+        var session = Create();
+        session.Reconvert("今日", "きょう");
+        var shown = session.HandleKey(VirtualKeys.Down, null, false, false, false, false).View!;
+        var commit = session.CommitPending();
+        Assert.Equal(shown.Text, commit.Commits.Single().Text);
+        Assert.True(!session.IsComposing, "確定したら変換中ではない");
+    }
+
+    [Test]
+    public static void Reconvert_InvalidInputDoesNotStart()
+    {
+        foreach (var (text, reading) in new[] { ("", ""), ("今日", ""), ("今日", "  "), ("", "きょう"), ("今\n日", "きょう"), (new string('あ', 129), new string('あ', 129)) })
+        {
+            var session = Create();
+            var result = session.Reconvert(text, reading);
+            Assert.True(!result.Consumed, $"始めない: {text.Length}/{reading}");
+            Assert.True(result.View is null && result.Commits.Count == 0 && !session.IsComposing, "何も出さない");
+        }
+    }
+
+    [Test]
+    public static void Reconvert_DoesNothingWhileComposingOrDirect()
+    {
+        var session = Create();
+        Type(session, "kyou");
+        var result = session.Reconvert("今日", "きょう");
+        Assert.True(!result.Consumed && result.Commits.Count == 0, "変換中は始めない");
+        Assert.True(session.IsComposing, "打っていた入力は変わらない");
+        session = Create();
+        session.Direct = true;
+        Assert.True(!session.Reconvert("今日", "きょう").Consumed, "英数では始めない");
+    }
+
+    [Test]
     public static void Json_IsEscaped()
     {
         var result = new SessionResult(true, [new TextEdit(2, "a\"b\\c\n")], new CompositionView("x", ["y"], 0, true, "h", ["x"], 0));

@@ -136,6 +136,16 @@ public static unsafe class Exports
     [UnmanagedCallersOnly(EntryPoint = "meltype_commit")]
     public static byte* Commit(IntPtr handle) => Run(handle, session => session.CommitPending());
 
+    /// <summary>
+    /// 選択した文字の再変換を始める (Mac の Control+Shift+R)。text は選択していた文字、reading はそのひらがなの読み。
+    /// 始められなければ Consumed = false の結果 (キーはアプリへ)。取り消したとき元の文字を戻すのは呼び出し側。
+    /// </summary>
+    [UnmanagedCallersOnly(EntryPoint = "meltype_reconvert")]
+    public static byte* Reconvert(IntPtr handle, byte* text, byte* reading)
+    {
+        return Run(handle, session => session.Reconvert(FromUtf8(text) ?? "", FromUtf8(reading) ?? ""));
+    }
+
     /// <summary>候補ウィンドウで候補を選んだ。</summary>
     [UnmanagedCallersOnly(EntryPoint = "meltype_select_candidate")]
     public static byte* SelectCandidate(IntPtr handle, int index) => Run(handle, session => session.SelectCandidate(index));

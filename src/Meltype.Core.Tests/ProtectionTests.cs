@@ -90,14 +90,15 @@ internal static class ProtectionTests
     }
 
     [Test]
-    public static void Protected_ReconversionReplacesSelection()
+    public static void Protected_ReconversionKeepsSelection()
     {
         var keyboard = new CompositionTests.Keyboard();
         keyboard.Host.Selection = new ReconversionSelection("@user", "@user");
         keyboard.Press(VirtualKeys.Convert);
         keyboard.Press(VirtualKeys.Return);
-        Assert.Equal("@user", keyboard.Host.Document);
-        Assert.Equal(0, keyboard.Host.Output.Count, "選択を置換し、別の確定入力を足さない");
+        Assert.True(!keyboard.Host.Events.Any(e => e.StartsWith("replace:")), "元の文字のままなら選択を置換しない");
+        Assert.Equal("@user", keyboard.Host.Selection?.Text, "選択はそのまま");
+        Assert.Equal(0, keyboard.Host.Output.Count, "別の確定入力を足さない");
         Assert.True(keyboard.Showing is null, "再変換の未確定状態を消す");
     }
 
