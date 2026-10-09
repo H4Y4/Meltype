@@ -15,6 +15,8 @@ final class MeltypeInputController: IMKInputController {
     private var hasMarkedText = false
     private var codeInput = false
     private var directInput = false
+    /// 再変換中の、元の選択文字。変換中の文字が選択範囲を置き換えているので、取り消したときはこれを入れ直す。
+    private var reconvertingText: String?
     private var suggestionPanel: NSPanel?
     private var displayedSuggestion: String?
     private var dictionaryObserver: NSObjectProtocol?
@@ -99,6 +101,13 @@ final class MeltypeInputController: IMKInputController {
             }
         }
 
+        // Control+Shift+R: 選択した文字の再変換 (macOS 標準の IME と同じキー)。始められないときはアプリへ通す。
+        if event.keyCode == kVK_ANSI_R, !directInput, !hasMarkedText,
+           event.modifierFlags.intersection([.shift, .control, .option, .command]) == [.shift, .control],
+           startReconversion(client) {
+            return true
+        }
+
         guard let vk = KeyMapping.virtualKey(for: event) else { return false }
         // event.characters は「見た目の 1 文字」で、UTF-16 要素が複数のことがある
         // (補助面の文字・結合文字・ZWJ 絵文字・異体字セレクター)。1 要素へ切り詰めたり 0 に置き換えたりしない。
@@ -140,6 +149,20 @@ final class MeltypeInputController: IMKInputController {
         return NativeCore.shared.handleKey(session, vk: vk, character: character, modifiers: modifiers, before: before, after: after)
     }
 
+    /// 選択範囲の文字を再変換する。選択が無い・長すぎる・読みが取れない・本体が始めなかったときは false (何も変えない)。
+    private func startReconversion(_ client: IMKTextInput) -> Bool {
+        let selection = client.selectedRange()
+        guard selection.location != NSNotFound, selection.length > 0, selection.length <= Reconversion.maxLength,
+              let text = client.attributedSubstring(from: selection)?.string,
+              (text as NSString).length == selection.length,
+              let reading = Reconversion.reading(of: text),
+              let result = NativeCore.shared.reconvert(session, text: text, reading: reading),
+              result.consumed, result.view != nil else { return false }
+        reconvertingText = text
+        apply(result, to: client)
+        return true
+    }
+
     /// フォーカスが外れた・クリックで別の場所に移ったときなど。未確定の内容をそのまま確定する。
     override func commitComposition(_ sender: Any!) {
         guard let client = (sender as? IMKTextInput) ?? self.client() else { return }
@@ -148,6 +171,7 @@ final class MeltypeInputController: IMKInputController {
 
     override func deactivateServer(_ sender: Any!) {
         commitComposition(sender)
+        reconvertingText = nil
         candidatesWindow?.hide()
         suggestionPanel?.orderOut(nil)
         displayedSuggestion = nil
@@ -282,9 +306,17 @@ final class MeltypeInputController: IMKInputController {
             }
             client.insertText(NSAttributedString(string: edit.text), replacementRange: range)
             hasMarkedText = false
+            // 再変換の確定: 確定した文字が変換中の文字 (元の選択範囲) を置き換えた。
+            reconvertingText = nil
         }
         if let view = result.view {
             showComposition(view, client: client)
+        } else if let original = reconvertingText {
+            // 再変換の取り消し (Esc・読みを全部消した): 確定せずに終わったので、変換中の文字を元の文字に戻す。
+            reconvertingText = nil
+            client.insertText(NSAttributedString(string: original), replacementRange: NSRange(location: NSNotFound, length: 0))
+            hasMarkedText = false
+            hideComposition(client: client)
         } else {
             hideComposition(client: client)
         }

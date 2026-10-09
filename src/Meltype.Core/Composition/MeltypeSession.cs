@@ -346,6 +346,32 @@ public sealed class MeltypeSession
         return _host.Result(consumed: false);
     }
 
+    /// <summary>再変換できる選択文字の長さの上限 (Windows 版と同じ)。</summary>
+    public const int MaxReconversionLength = 128;
+
+    /// <summary>
+    /// 確定済みの文字を選択して再変換を始める (Mac の Control+Shift+R)。text は選択していた文字、reading はそのひらがなの読み。
+    /// 始められたら変換中の表示を返し (Consumed = true)、始められなければ何もせずキーをアプリへ渡す (Consumed = false)。
+    /// Mac では変換中の文字が選択範囲を置き換えるので、確定は text を置き換える通常の確定になる。
+    /// 取り消し (Esc・読みを全部消す) では確定せずに終わるので、元の text に戻すのは呼び出し側の仕事。
+    /// </summary>
+    public SessionResult Reconvert(string text, string reading)
+    {
+        _host.Begin(null, false, null, null);
+        if (_controller.IsComposing || Direct || !_settings().Enabled ||
+            string.IsNullOrWhiteSpace(reading) || string.IsNullOrEmpty(text) ||
+            text.Length > MaxReconversionLength || reading.Length > MaxReconversionLength ||
+            text.AsSpan().IndexOfAny('\n', '\r') >= 0 || reading.AsSpan().IndexOfAny('\n', '\r') >= 0)
+            return _host.Result(consumed: false);
+        _host.PrepareReconversion(new ReconversionSelection(text, reading));
+        var down = new KeyEvent(VirtualKeys.Convert, 0, false, false, false, Environment.TickCount64);
+        // 変換キーの経路 (Windows 版の再変換と同じ) で始める。選択は Host が覚えているものを使う。
+        Feed(down, e => e.Vk == VirtualKeys.Convert);
+        Feed(down with { IsUp = true });
+        _host.DropPendingReconversion();
+        return _host.Result(consumed: _controller.IsComposing);
+    }
+
     /// <summary>候補ウィンドウで候補をクリックしたとき。</summary>
     public SessionResult SelectCandidate(int index)
     {
@@ -383,6 +409,36 @@ public sealed class MeltypeSession
         private string? _before, _after;
         private CompositionView? _view;
         private bool _hidden;
+
+        // 再変換の選択。Reconvert で用意し、Core が取りに来たら _reconversion に移す。確定のときに同じものか確かめる。
+        private ReconversionSelection? _pendingReconversion;
+        private ReconversionSelection? _reconversion;
+
+        public void PrepareReconversion(ReconversionSelection selection)
+        {
+            _pendingReconversion = selection;
+            _reconversion = null;
+        }
+
+        public void DropPendingReconversion() => _pendingReconversion = null;
+
+        public ReconversionSelection? GetReconversionSelection()
+        {
+            _reconversion = _pendingReconversion;
+            _pendingReconversion = null;
+            return _reconversion;
+        }
+
+        /// <summary>Mac では変換中の文字が選択範囲を置き換えているので、確定した文字をそのまま入力すれば置き換わる。</summary>
+        public bool TryReplaceSelection(ReconversionSelection selection, string text)
+        {
+            if (!ReferenceEquals(_reconversion, selection)) return false;
+            _reconversion = null;
+            CommitText(text);
+            // 再変換で入れた文字は確定し直しの対象にしない
+            ForgetCommitted();
+            return true;
+        }
 
         public bool ReplayedCurrent { get; private set; }
 
