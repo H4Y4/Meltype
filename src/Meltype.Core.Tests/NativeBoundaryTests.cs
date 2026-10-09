@@ -41,6 +41,27 @@ internal static unsafe class NativeBoundaryTests
             }
         }
 
+        public JsonDocument Reconvert(string? text, string? reading)
+        {
+            delegate* unmanaged<IntPtr, byte*, byte*, byte*> reconvert = &Exports.Reconvert;
+            var textPointer = text is null ? IntPtr.Zero : Marshal.StringToCoTaskMemUTF8(text);
+            var readingPointer = reading is null ? IntPtr.Zero : Marshal.StringToCoTaskMemUTF8(reading);
+            byte* pointer;
+            try { pointer = reconvert(GCHandle.ToIntPtr(_handle), (byte*)textPointer, (byte*)readingPointer); }
+            finally
+            {
+                Marshal.FreeCoTaskMem(textPointer);
+                Marshal.FreeCoTaskMem(readingPointer);
+            }
+            Assert.True(pointer != null, "C ABI が有効な JSON を返す");
+            try { return JsonDocument.Parse(Marshal.PtrToStringUTF8((IntPtr)pointer)!); }
+            finally
+            {
+                delegate* unmanaged<byte*, void> free = &Exports.Free;
+                free(pointer);
+            }
+        }
+
         public void Type(string text, string? after = null)
         {
             foreach (var c in text)
@@ -202,6 +223,36 @@ internal static unsafe class NativeBoundaryTests
             using var result = withScalar.Key(scalar, 0x07);
             using var noCharacter = withoutScalar.Key(0, 0x07);
             Assert.True(result.RootElement.GetRawText() != noCharacter.RootElement.GetRawText(), "範囲外は文字として渡る");
+        }
+    }
+
+    [Test]
+    public static void Native_ReconvertStartsAndCommitsThroughTheAbi()
+    {
+        using var native = new NativeSession();
+        using var started = native.Reconvert("今日", "きょう");
+        Assert.True(started.RootElement.GetProperty("consumed").GetBoolean(), "再変換を始めたらキーは使う");
+        Assert.Equal(0, started.RootElement.GetProperty("commits").GetArrayLength());
+        var view = started.RootElement.GetProperty("view");
+        Assert.True(view.GetProperty("converting").GetBoolean(), "変換中の表示を返す");
+        var shown = view.GetProperty("text").GetString();
+        using var enter = native.Key('\r', VirtualKeys.Return);
+        var commits = enter.RootElement.GetProperty("commits");
+        Assert.Equal(1, commits.GetArrayLength());
+        Assert.Equal(shown, commits[0].GetProperty("text").GetString());
+        Assert.Equal(0, commits[0].GetProperty("deleteBefore").GetInt32());
+    }
+
+    [Test]
+    public static void Native_ReconvertRejectsEmptyOrNullArguments()
+    {
+        foreach (var (text, reading) in new (string?, string?)[] { (null, null), ("今日", null), (null, "きょう"), ("今日", "") })
+        {
+            using var native = new NativeSession();
+            using var result = native.Reconvert(text, reading);
+            Assert.True(!result.RootElement.GetProperty("consumed").GetBoolean(), "始めずにキーを通す");
+            Assert.Equal(JsonValueKind.Null, result.RootElement.GetProperty("view").ValueKind);
+            Assert.True(!native.Session.IsComposing, "変換中にならない");
         }
     }
 }
