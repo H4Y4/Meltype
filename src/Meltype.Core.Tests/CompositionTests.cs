@@ -1647,6 +1647,56 @@ internal static class CompositionTests
     }
 
     [Test]
+    public static void ZArrows_LatinWordsContainingZ_StayLatin()
+    {
+        // 打ったままの英字が英単語・固有名詞・辞書にない英字の語になるなら、zh/zj/zk/zl を矢印にしない
+        var saved = Detector.SpellChecker;
+        Detector.SpellChecker = Detection.BuiltInWordChecker.Shared;
+        try
+        {
+            foreach (var (typed, expected) in new[]
+            {
+                ("zlib", "zlib"), ("pip install zlib", "pip install zlib"), ("zhang", "zhang"), ("zhangsan", "zhangsan"),
+                ("brezhnev", "brezhnev"), ("zkSync", "zkSync"), ("bamboozle", "bamboozle"), ("bamboozled", "bamboozled"), ("zh-CN", "zh-CN"),
+            })
+            {
+                var enter = new Keyboard();
+                enter.Type(typed + "\n");
+                Assert.Equal(expected, enter.Host.Document, $"「{typed}」+ Enter");
+                var space = new Keyboard();
+                space.Type(typed + " ");
+                Assert.Equal(expected, (space.Host.Document + space.Showing).Trim(), $"「{typed}」+ Space");
+            }
+            // 矢印のまま確定したいときは今までどおり
+            foreach (var (typed, expected) in new[] { ("zl", "→"), ("zlkyou", "→きょう"), ("kyouzlashita", "きょう→あした"), ("hello zl", "hello →"), ("kinzl", "きん→") })
+            {
+                var k = new Keyboard();
+                k.Type(typed + "\n");
+                Assert.Equal(expected, k.Host.Document, $"「{typed}」");
+            }
+        }
+        finally
+        {
+            Detector.SpellChecker = saved;
+        }
+    }
+
+    [Test]
+    public static void ZArrows_LearnedLatinWord_StaysLatin()
+    {
+        // zlib を F10 で英字にして確定すると、次からは zlib のまま (矢印にしない)
+        var languages = new LanguageMemory(null);
+        var learn = new Keyboard(languages: languages);
+        learn.Type("zl");
+        learn.Type("ib");
+        learn.Press(VirtualKeys.F10);
+        learn.Type("\n");
+        var again = new Keyboard(languages: languages);
+        again.Type("zlib\n");
+        Assert.Equal("zlib", again.Host.Document, "覚えた後の zlib");
+    }
+
+    [Test]
     public static void ZArrows_UserRomajiTableWins()
     {
         // ユーザーのローマ字の表 (romaji.txt) に zl があれば、矢印にせずユーザーの表を使う

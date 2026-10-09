@@ -41,6 +41,9 @@ public sealed class CompositionText
 
     public CompositionText(CompositionDetector detector) => _detector = detector;
 
+    /// <summary>true なら z + h/j/k/l を矢印にしない (矢印にせず打ったままの英字として見たときの判定に使う)。</summary>
+    internal bool NoZArrows { get; init; }
+
     public IReadOnlyList<CompositionUnit> Units => _units;
     public string Pending => _pending.ToString();
     public bool IsEmpty => _units.Count == 0 && _pending.Length == 0;
@@ -166,7 +169,7 @@ public sealed class CompositionText
             // z + h/j/k/l で矢印 (macOS の日本語入力と同じ: zh ←、zj ↓、zk ↑、zl →)。
             // 英単語 (puzzle・dazzle の zz の後の l) と、ローマ字として読めなかった英字の後ろ (英単語の途中) は矢印にしない。
             // ユーザーのローマ字の表に zh などがあれば、ユーザーの表を優先する。
-            if (_pending.Length == 1 && _pending[0] == 'z' && ZArrow(c) is { } arrow && CanFollowArrow() &&
+            if (!NoZArrows && _pending.Length == 1 && _pending[0] == 'z' && ZArrow(c) is { } arrow && CanFollowArrow() &&
                 !_detector.Romaji.HasCustomSpelling("z" + c))
             {
                 _pending.Clear();
@@ -991,9 +994,11 @@ public sealed class CompositionText
             var runOffset = offset;
             offset += letters.Length;
             // 数字のすぐ後ろの単位 (10|mm|で) は打ち間違いではない
+            // 矢印を打ったと見ずに英字にした語 (zhangsan の angsan) は打ち間違いではない
+            var arrowWord = start > 0 && _units[start - 1].IsArrow && IsShownEnglish(runOffset);
             var unitAfterNumber = start > 0 && _units[start - 1].Raw is [var digit] && char.IsAsciiDigit(digit) &&
                 UnitWords.Any(u => letters.StartsWith(u, StringComparison.OrdinalIgnoreCase));
-            if (!unitAfterNumber && letters.All(char.IsAsciiLetterLower) && !_detector.IsKnownEnglishWord(letters) &&
+            if (!arrowWord && !unitAfterNumber && letters.All(char.IsAsciiLetterLower) && !_detector.IsKnownEnglishWord(letters) &&
                 corrector.FirstUnreadable(letters, final: true) is var first and > 0 &&
                 !(runOffset + first < shownEnglish.Count && shownEnglish[runOffset + first]) &&
                 // 数字のすぐ前の短い英字 (kaibunsyo|rta|2026 の rta) は略語。打ち間違いとして直さない
@@ -1079,6 +1084,18 @@ public sealed class CompositionText
     /// 打った英字 (Raw) の 1 文字ずつが、今の表示で英単語 (5 文字以上の知っている語: meeting) の区間に入っているか。
     /// 短い語 (onegai|shim|su の shim) は、ローマ字の途中に偶然現れることが多いので含めない (打ち間違いとして直す)。
     /// </summary>
+    /// <summary>打った文字の offset 文字目が、今の表示で英字の区間に入っているか (知っている語かは問わない)。</summary>
+    private bool IsShownEnglish(int offset)
+    {
+        var position = 0;
+        foreach (var segment in Segments(final: false))
+        {
+            position += segment.Raw.Length;
+            if (offset < position) return segment.IsEnglish;
+        }
+        return false;
+    }
+
     private List<bool> EnglishMask()
     {
         var mask = new List<bool>();
