@@ -103,21 +103,6 @@ public enum ControlKeyStyle
     [Description("Mac と同じ (Ctrl+J/K/L など)")] Mac,
 }
 
-/// <summary>ControlKeyStyle を名前で読み書きする。config.json に無い・知らない値 (打ち間違いなど) は Atok にして、ほかの設定は捨てない。</summary>
-internal sealed class ControlKeyStyleConverter : JsonConverter<ControlKeyStyle>
-{
-    public override ControlKeyStyle Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
-    {
-        var style = reader.TokenType == JsonTokenType.String && Enum.TryParse<ControlKeyStyle>(reader.GetString(), ignoreCase: true, out var parsed) && Enum.IsDefined(parsed)
-            ? parsed : ControlKeyStyle.Atok;
-        // 文字列以外 (数値・配列など) は読み飛ばす
-        if (reader.TokenType is JsonTokenType.StartArray or JsonTokenType.StartObject) reader.Skip();
-        return style;
-    }
-
-    public override void Write(Utf8JsonWriter writer, ControlKeyStyle value, JsonSerializerOptions options) => writer.WriteStringValue(value.ToString());
-}
-
 public enum InputMode
 {
     /// <summary>Meltype 自身の変換ボックスで入力する (半角/全角 不要)。</summary>
@@ -247,7 +232,6 @@ public sealed class Settings
 
     [Category("1. 全般"), DisplayName("入力中の Ctrl キー"),
      Description("変換ボックスに文字があるときの Ctrl+キーの割り当てです。「ATOK と同じ」は Ctrl+U/I/O/P でひらがな・カタカナ・半角英数・全角英数にします。「Mac と同じ」は Ctrl+J/K/L/;/: でひらがな・カタカナ・全角英数・半角カタカナ・半角英数にし、Ctrl+N/P で候補、Ctrl+B/F で文節の移動、Ctrl+W/O/I で文節の伸び縮みをします。入力が空のときの Ctrl+キーは、どちらでもアプリにそのまま渡します。")]
-    [JsonConverter(typeof(ControlKeyStyleConverter))]
     public ControlKeyStyle ControlKeys { get; set; } = ControlKeyStyle.Atok;
 
     [Category("1. 全般"), DisplayName("ライブ変換"),
