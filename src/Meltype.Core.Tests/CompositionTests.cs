@@ -107,8 +107,12 @@ internal static class CompositionTests
         }
         public void Replay(MouseButtonEvent e) => Events.Add($"mouse:{e.Message:X}");
 
+        /// <summary>JIS 配列の代わりに使うキー (仮想キー, Shift → 文字)。US 配列の ; : ' を試すのに使う。</summary>
+        public Dictionary<(int Vk, bool Shift), char>? Layout { get; set; }
+
         public char? CharFromKey(KeyEvent e, bool shift)
         {
+            if (Layout is not null && !VirtualKeys.IsLetter(e.Vk)) return Layout.TryGetValue((e.Vk, shift || PhysicalShift), out var laid) ? laid : null;
             if (VirtualKeys.IsLetter(e.Vk)) return shift || PhysicalShift ? (char)e.Vk : char.ToLowerInvariant((char)e.Vk);
             var shifted = shift || PhysicalShift;
             foreach (var (c, key) in JisKeys)
@@ -166,6 +170,9 @@ internal static class CompositionTests
 
         /// <summary>句読点の組み合わせ (設定)。</summary>
         public Meltype.Config.PunctuationStyle Punctuation { get; set; }
+
+        /// <summary>入力中の Ctrl キーの割り当て (設定)。</summary>
+        public Meltype.Config.ControlKeyStyle ControlKeys { get; set; }
 
         /// <summary>かな入力で、仮想キーを順に打つ (shift: その打鍵で Shift を押す)。</summary>
         public void TypeKeys(params (int Vk, bool Shift)[] keys)
@@ -232,6 +239,7 @@ internal static class CompositionTests
                 Predictor = predictor,
                 Predictions = () => predictor is not null,
                 Punctuation = () => Punctuation,
+                ControlKeys = () => ControlKeys,
                 SlashAsMiddleDot = () => slashAsMiddleDot,
                 Now = now ?? (() => DateTime.Now),
                 ShowTypedKeys = () => showTypedKeys,
@@ -723,6 +731,210 @@ internal static class CompositionTests
         Assert.Equal("あいうえお", k.Host.Document);
         var down = k.Host.Events.IndexOf("down:A2");
         Assert.True(down >= 0 && k.Host.Events.IndexOf("down:43") > down, "確定してから Ctrl+C を送る: " + string.Join(" ", k.Host.Events));
+    }
+
+    [Test]
+    public static void ControlKeys_DefaultIsAtok_NoMacAssignments()
+    {
+        // 既定 (ATOK 式) では Ctrl+J は割り当てなし。確定してから Ctrl+J をアプリへ送る
+        Assert.Equal(Meltype.Config.ControlKeyStyle.Atok, new Meltype.Config.Settings().ControlKeys);
+        var k = new Keyboard();
+        k.Type("aiueo");
+        CtrlPress(k, 'J');
+        Assert.Equal("あいうえお", k.Host.Document);
+        Assert.True(k.Host.Events.IndexOf("down:A2") is var ctrl && ctrl >= 0 && k.Host.Events.IndexOf("down:4A") > ctrl, string.Join(" ", k.Host.Events));
+    }
+
+    [Test]
+    public static void MacControl_JKL_SwitchKanaAndLetters()
+    {
+        // Mac 式: Ctrl+J ひらがな / Ctrl+K カタカナ / Ctrl+L 全角英字
+        var k = new Keyboard { ControlKeys = Meltype.Config.ControlKeyStyle.Mac };
+        k.Type("aiueo");
+        CtrlPress(k, 'K');
+        Assert.Equal("アイウエオ", k.Showing);
+        CtrlPress(k, 'L');
+        Assert.Equal("ａｉｕｅｏ", k.Showing);
+        CtrlPress(k, 'J');
+        Assert.Equal("あいうえお", k.Showing);
+        Assert.Equal(0, k.Host.Output.Count);
+        Assert.True(!k.Host.Events.Any(e => e.EndsWith(":A2")), "Ctrl はアプリに送らない: " + string.Join(" ", k.Host.Events));
+    }
+
+    [Test]
+    public static void MacControl_Symbols_JisLayout()
+    {
+        // JIS 配列: ; のキー (0xBB) は半角カタカナ、: のキー (0xBA) は半角英字、' は Shift+7
+        var k = new Keyboard { ControlKeys = Meltype.Config.ControlKeyStyle.Mac };
+        k.Type("aiueo");
+        CtrlPress(k, 0xBB);
+        Assert.Equal("ｱｲｳｴｵ", k.Showing, "Ctrl+; = 半角カタカナ");
+        CtrlPress(k, 0xBA);
+        Assert.Equal("aiueo", k.Showing, "Ctrl+: = 半角英字");
+        CtrlPress(k, 'J');
+        Assert.Equal("あいうえお", k.Showing);
+        k.Host.PhysicalShift = true;
+        CtrlPress(k, 0x37);
+        k.Host.PhysicalShift = false;
+        Assert.Equal("aiueo", k.Showing, "Ctrl+' = 半角英字");
+        Assert.Equal(0, k.Host.Output.Count);
+    }
+
+    [Test]
+    public static void MacControl_Symbols_UsLayout()
+    {
+        // US 配列は仮想キーが違う (; = 0xBA、' = 0xDE)。仮想キーではなく、そのキーで入力される文字で判定する
+        var k = new Keyboard { ControlKeys = Meltype.Config.ControlKeyStyle.Mac };
+        k.Host.Layout = new() { [(0xBA, false)] = ';', [(0xBA, true)] = ':', [(0xDE, false)] = '\'', [(0xDE, true)] = '"' };
+        k.Type("aiueo");
+        CtrlPress(k, 0xBA);
+        Assert.Equal("ｱｲｳｴｵ", k.Showing, "Ctrl+; = 半角カタカナ");
+        CtrlPress(k, 0xDE);
+        Assert.Equal("aiueo", k.Showing, "Ctrl+' = 半角英字");
+        CtrlPress(k, 'J');
+        k.Key(VirtualKeys.LControl);
+        k.Key(VirtualKeys.LShift);
+        k.Host.PhysicalShift = true;
+        k.Press(0xBA);
+        k.Host.PhysicalShift = false;
+        k.Key(VirtualKeys.LShift, up: true);
+        k.Key(VirtualKeys.LControl, up: true);
+        Assert.Equal("aiueo", k.Showing, "Ctrl+Shift+; (= Ctrl+:) も半角英字");
+        CtrlPress(k, 0xDC);
+        Assert.Equal("aiueo", k.Host.Document, "割り当ての無い記号は見えているとおりに確定してからアプリへ");
+        Assert.True(k.Host.Events.Contains("down:DC"), string.Join(" ", k.Host.Events));
+    }
+
+    [Test]
+    public static void MacControl_NP_MatchSelectingCandidates()
+    {
+        // 変換中の Ctrl+N / Ctrl+P は ↓ / ↑ と同じ (次の候補 / 前の候補)
+        var arrows = new Keyboard();
+        arrows.Type("egao ");
+        var mac = new Keyboard { ControlKeys = Meltype.Config.ControlKeyStyle.Mac };
+        mac.Type("egao ");
+        foreach (var (arrow, letter) in new[] { (VirtualKeys.Down, 'N'), (VirtualKeys.Down, 'N'), (VirtualKeys.Up, 'P'), (VirtualKeys.Up, 'P'), (VirtualKeys.Up, 'P') })
+        {
+            arrows.Press(arrow);
+            CtrlPress(mac, letter);
+            Assert.Equal(arrows.Host.View!.SelectedIndex, mac.Host.View!.SelectedIndex);
+            Assert.Equal(arrows.Showing, mac.Showing);
+        }
+        Assert.Equal(0, mac.Host.Output.Count);
+    }
+
+    [Test]
+    public static void MacControl_BeforeConversion_EntersClauseSelectionLikeArrows()
+    {
+        // 変換前の Ctrl+N / Ctrl+B / Ctrl+F も、↓ / → / ← と同じ (文節の選択に入る)
+        foreach (var (arrow, letter) in new[] { (VirtualKeys.Down, 'N'), (VirtualKeys.Up, 'P'), (VirtualKeys.Right, 'B'), (VirtualKeys.Left, 'F') })
+        {
+            var arrows = new Keyboard();
+            arrows.Type("tanniwotoru");
+            arrows.Press(arrow);
+            var mac = new Keyboard { ControlKeys = Meltype.Config.ControlKeyStyle.Mac };
+            mac.Type("tanniwotoru");
+            CtrlPress(mac, letter);
+            Assert.True(mac.Host.View!.Converting, $"Ctrl+{letter} で文節の選択に入る");
+            Assert.Equal(arrows.Host.View!.SelectedClause, mac.Host.View.SelectedClause, $"Ctrl+{letter}");
+            Assert.Equal(arrows.Showing, mac.Showing, $"Ctrl+{letter}");
+            Assert.Equal(0, mac.Host.Output.Count);
+        }
+    }
+
+    [Test]
+    public static void MacControl_BF_MoveClauses()
+    {
+        // Apple のガイドの表のとおり Ctrl+B = 次の文節 (→)、Ctrl+F = 前の文節 (←)
+        var k = new Keyboard { ControlKeys = Meltype.Config.ControlKeyStyle.Mac };
+        k.Type("tanniwotoru ");
+        Assert.Equal(0, k.Host.View!.SelectedClause);
+        CtrlPress(k, 'B');
+        Assert.Equal(1, k.Host.View.SelectedClause, "Ctrl+B で次の文節");
+        CtrlPress(k, 'F');
+        Assert.Equal(0, k.Host.View.SelectedClause, "Ctrl+F で前の文節");
+    }
+
+    [Test]
+    public static void MacControl_WOI_ResizeSelectedClause()
+    {
+        // Ctrl+I は Shift+← (縮める)、Ctrl+W / Ctrl+O は Shift+→ (伸ばす)
+        var k = new Keyboard { ControlKeys = Meltype.Config.ControlKeyStyle.Mac };
+        k.Type("tanniwotoru ");
+        CtrlPress(k, 'I');
+        Assert.Equal("単位|をとる", string.Join("|", k.Host.View!.Clauses!), "Ctrl+I で縮める");
+        CtrlPress(k, 'W');
+        Assert.Equal("たんいを|とる", string.Join("|", k.Host.View.Clauses!), "Ctrl+W で伸ばす");
+        CtrlPress(k, 'I');
+        CtrlPress(k, 'O');
+        Assert.Equal("たんいを|とる", string.Join("|", k.Host.View.Clauses!), "Ctrl+O でも伸ばす");
+        Assert.Equal(0, k.Host.Output.Count);
+    }
+
+    [Test]
+    public static void MacControl_UnassignedKeys_CommitThenPass()
+    {
+        // Mac 式では ATOK 式の Ctrl+U は割り当てなし。Ctrl+C などと同じく、確定してからアプリへ送る
+        foreach (var letter in new[] { 'U', 'C' })
+        {
+            var k = new Keyboard { ControlKeys = Meltype.Config.ControlKeyStyle.Mac };
+            k.Type("aiueo");
+            CtrlPress(k, letter);
+            Assert.Equal("あいうえお", k.Host.Document, $"Ctrl+{letter}");
+            var down = k.Host.Events.IndexOf("down:A2");
+            Assert.True(down >= 0 && k.Host.Events.IndexOf($"down:{(int)letter:X2}") > down, $"確定してから Ctrl+{letter} を送る: " + string.Join(" ", k.Host.Events));
+            Assert.True(!k.Gate.IsCaptured, "割り当ての無いショートカットの後は横取りをやめる");
+        }
+    }
+
+    [Test]
+    public static void MacControl_WhenEmpty_PassesToApp()
+    {
+        // 入力が空のときの Ctrl+N (Emacs 風の移動) は、どちらの割り当てでもアプリへ通す
+        foreach (var style in new[] { Meltype.Config.ControlKeyStyle.Mac, Meltype.Config.ControlKeyStyle.Atok })
+        {
+            var k = new Keyboard { ControlKeys = style };
+            k.Key(VirtualKeys.LControl);
+            k.Press('N');
+            k.Key(VirtualKeys.LControl, up: true);
+            Assert.Equal("passed:A2|passed:4E|passed-up:4E|passed-up:A2", string.Join("|", k.Host.Events), style.ToString());
+            Assert.True(!k.Gate.IsCaptured && k.Host.View is null, "入力が空なら横取りしない");
+        }
+    }
+
+    [Test]
+    public static void MacControl_Held_RepeatsShortcutAndMatchesUps()
+    {
+        // Ctrl を押したまま K → L → J と打つ。Ctrl はアプリに送らず、上げ下げもそろったまま
+        foreach (var control in new[] { VirtualKeys.LControl, VirtualKeys.RControl })
+        {
+            var k = new Keyboard { ControlKeys = Meltype.Config.ControlKeyStyle.Mac };
+            k.Type("aiueo");
+            k.Key(control);
+            k.Press('K');
+            Assert.Equal("アイウエオ", k.Showing);
+            k.Press('L');
+            Assert.Equal("ａｉｕｅｏ", k.Showing);
+            k.Press('J');
+            k.Key(control, up: true);
+            Assert.Equal("あいうえお", k.Showing);
+            Assert.True(!k.Host.Events.Any(e => e.EndsWith($":{control:X2}")), "Ctrl を送らない: " + string.Join(" ", k.Host.Events));
+            k.Press(VirtualKeys.Return);
+            Assert.Equal("あいうえお", k.Host.Document);
+            Assert.True(!k.Gate.IsCaptured, "確定した後は横取りをやめる");
+        }
+    }
+
+    [Test]
+    public static void MacControl_NavigationOnLetters_CommitsThenSendsArrow()
+    {
+        // 英字のまま (F10) の入力中の Ctrl+N は、↓ と同じく確定してから ↓ を送る (n は入力しない)
+        var k = new Keyboard { ControlKeys = Meltype.Config.ControlKeyStyle.Mac };
+        k.Type("aiueo");
+        k.Press(VirtualKeys.F10);
+        CtrlPress(k, 'N');
+        Assert.Equal("aiueo", k.Host.Document);
+        Assert.True(k.Host.Events.Contains("down:28"), string.Join(" ", k.Host.Events));
     }
 
     [Test]
@@ -2061,6 +2273,93 @@ internal static class CompositionTests
         Assert.Equal("tesuto", k.Showing);
         k.Press(VirtualKeys.OemAuto); // 半角/全角 で日本語⇔英字
         Assert.Equal("てすと", k.Showing);
+    }
+
+    [Test]
+    public static void F8_ShowsHalfWidthKatakana()
+    {
+        // #74 #236: F8 で半角カタカナにする。濁点・半濁点は半角の ﾞ ﾟ に分け、Enter でそのまま確定する
+        var k = new Keyboard();
+        k.Type("aiueo");
+        k.Press(VirtualKeys.F8);
+        Assert.Equal("ｱｲｳｴｵ", k.Showing);
+        k.Press(VirtualKeys.Return);
+        Assert.Equal("ｱｲｳｴｵ", k.Host.Document);
+        Assert.True(!k.Host.Events.Any(e => e.StartsWith("down:77")), "F8 はアプリに送らない");
+
+        foreach (var (typed, expected) in new[] { ("kyou", "ｷｮｳ"), ("gappa", "ｶﾞｯﾊﾟ"), ("konpyu-ta", "ｺﾝﾋﾟｭｰﾀ") })
+        {
+            var each = new Keyboard();
+            each.Type(typed);
+            each.Press(VirtualKeys.F8);
+            Assert.Equal(expected, each.Showing);
+        }
+    }
+
+    [Test]
+    public static void F8_DuringConversion_ShowsWholeTextAsHalfWidthKatakana()
+    {
+        // 変換中 (Space の後) に F8 を押したら、変換をやめて全体を半角カタカナにする (F7 と同じ)
+        var k = new Keyboard();
+        k.Type("kyouha");
+        k.Press(VirtualKeys.Space);
+        k.Press(VirtualKeys.F8);
+        Assert.Equal("ｷｮｳﾊ", k.Showing);
+        k.Press(VirtualKeys.Return);
+        Assert.Equal("ｷｮｳﾊ", k.Host.Document);
+    }
+
+    [Test]
+    public static void F8_ThenF6_ReturnsToHiragana()
+    {
+        var k = new Keyboard();
+        k.Type("aiueo");
+        k.Press(VirtualKeys.F8);
+        Assert.Equal("ｱｲｳｴｵ", k.Showing);
+        k.Press(VirtualKeys.F6);
+        Assert.Equal("あいうえお", k.Showing);
+        k.Press(VirtualKeys.F8);
+        k.Press(VirtualKeys.F7);
+        Assert.Equal("アイウエオ", k.Showing);
+    }
+
+    [Test]
+    public static void F8_OnEnglishWord_ReadsAsRomaji_LikeF7()
+    {
+        // 英語と判定して英字で見せていた語も、F7 と同じくローマ字として読んだかなにする
+        var k = new Keyboard();
+        k.Type("hello");
+        Assert.Equal("hello", k.Showing);
+        k.Press(VirtualKeys.F7);
+        var katakana = k.Showing;
+        Assert.True(katakana is not null && katakana != "hello", "F7 でかなになる");
+        k.Press(VirtualKeys.F8);
+        Assert.Equal(CompositionText.ToHalfWidthKatakana(katakana!), k.Showing);
+        Assert.True(!k.Showing!.Any(char.IsAsciiLetter), "英字が残らない");
+        k.Press(VirtualKeys.Return);
+        Assert.Equal(CompositionText.ToHalfWidthKatakana(katakana!), k.Host.Document);
+    }
+
+    [Test]
+    public static void F8_Commit_LearnsLanguageAsJapanese()
+    {
+        // 英語と判定される語を F8 で半角カナにして確定したら、F6 / F7 と同じく次から日本語にする
+        var memory = new LanguageMemory(null);
+        var k = new Keyboard(languages: memory);
+        k.Type("hello");
+        k.Press(VirtualKeys.F8);
+        k.Press(VirtualKeys.Return);
+        Assert.Equal(false, memory.Get("hello"));
+    }
+
+    [Test]
+    public static void CtrlUiop_DoesNotIncludeHalfWidthKatakana()
+    {
+        // Ctrl+I は今までどおり全角カタカナ (半角カナは F8 だけ)
+        var k = new Keyboard();
+        k.Type("aiueo");
+        CtrlPress(k, 'I');
+        Assert.Equal("アイウエオ", k.Showing);
     }
 
     [Test]
