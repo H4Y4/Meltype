@@ -154,4 +154,54 @@ internal static unsafe class NativeBoundaryTests
             Assert.True(native.Session.IsComposing, "未確定の内容を変えない");
         }
     }
+
+    private static bool ContainsMacFunctionKeyScalar(string json) =>
+        json.Any(c => c is >= '\uF700' and <= '\uF747');
+
+    [Test]
+    public static void Native_MacFunctionKeyScalarIsTreatedAsNoCharacter()
+    {
+        // macOS の矢印・Delete・PageDown・F8 は characters に U+F700..U+F747 を入れてくる。文字なし (0) と同じ結果になる。
+        foreach (var (raw, scalar, vk) in new[]
+        {
+            ("aiueo", 0xF702, VirtualKeys.Left), ("hello", 0xF702, VirtualKeys.Left), ("hello", 0xF728, 0x2E),
+            ("aiueo", 0xF72D, 0x22), ("aiueo", 0xF70B, 0x77), ("aiueo", 0xF700, VirtualKeys.Up), ("aiueo", 0xF747, 0x07),
+        })
+        {
+            using var withScalar = new NativeSession();
+            withScalar.Type(raw);
+            using var withoutScalar = new NativeSession();
+            withoutScalar.Type(raw);
+            using var result = withScalar.Key(scalar, vk);
+            using var expected = withoutScalar.Key(0, vk);
+            var json = result.RootElement.GetRawText();
+            Assert.True(!ContainsMacFunctionKeyScalar(json), "私用領域の文字を表示にも確定にも入れない");
+            Assert.Equal(expected.RootElement.GetRawText(), json);
+        }
+    }
+
+    [Test]
+    public static void Native_MacLeftArrowCommitsLatinAndPassesThrough()
+    {
+        using var native = new NativeSession();
+        native.Type("hello");
+        using var result = native.Key(0xF702, VirtualKeys.Left);
+        AssertPassThrough(result, "hello");
+    }
+
+    [Test]
+    public static void Native_PrivateUseScalarOutsideFunctionKeyRangeStaysCharacter()
+    {
+        // U+F8FF (Apple ロゴ) や範囲の両隣は機能キーではないので、これまでどおり文字として扱う。
+        foreach (var scalar in new[] { 0xF8FF, 0xF6FF, 0xF748 })
+        {
+            using var withScalar = new NativeSession();
+            withScalar.Type("aiueo");
+            using var withoutScalar = new NativeSession();
+            withoutScalar.Type("aiueo");
+            using var result = withScalar.Key(scalar, 0x07);
+            using var noCharacter = withoutScalar.Key(0, 0x07);
+            Assert.True(result.RootElement.GetRawText() != noCharacter.RootElement.GetRawText(), "範囲外は文字として渡る");
+        }
+    }
 }

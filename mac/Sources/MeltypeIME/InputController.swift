@@ -84,7 +84,12 @@ final class MeltypeInputController: IMKInputController {
             apply(NativeCore.shared.commitBeforeExternalText(session, text: event.characters ?? ""), to: client)
             return false
         }
-        let character: Int32 = scalars.count == 1 ? Int32(scalars[0].value) : 0
+        // 矢印・Delete・Home/End・PageUp/PageDown・F1〜F35 などは、characters に私用領域の文字
+        // (NSUpArrowFunctionKey U+F700 〜 NSModeSwitchFunctionKey U+F747) が入る。文字ではないので、
+        // 文字なし (0) として vk だけを渡す。本体側 (Exports.cs の IsMacFunctionKeyScalar) と同じ範囲。
+        // その外の私用領域 (U+F8FF の Apple ロゴなど) は、ふつうの文字として渡す。
+        let functionKeyRange: ClosedRange<UInt32> = 0xF700...0xF747
+        let character: Int32 = scalars.count == 1 && !functionKeyRange.contains(scalars[0].value) ? Int32(scalars[0].value) : 0
         let flags = event.modifierFlags
         var modifiers: Int32 = 0
         if flags.contains(.shift) { modifiers |= 1 }
