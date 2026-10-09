@@ -1445,9 +1445,18 @@ public sealed class CompositionController
     /// <summary>
     /// 日付・時刻の候補 (いま → 17:22、あした → 10月10日、こんげつ → 2026年10月、ことし → 2026年) を選んだ文節か。
     /// 学習しない (覚えると、次に打ったときに古い日時が最初に出る)。
+    /// 日付・時刻と見なす規則 (読みが いま・きょう・あした などのときだけ):
+    ///   数字 (全角を含む char.IsDigit) を含む、または 曜日 で終わる、
+    ///   または 漢数字と 年月日 だけでできている (二〇二六年・十月十日。変換エンジンの候補一覧にある)。
+    /// 一昨日 (おととい) のように漢数字を含んでも 昨 など別の字が混ざる語は日付ではなく、今までどおり学習する。
+    /// 明日・来年・今日・去年 は数字も 曜日 も無いので日付ではない。
     /// </summary>
     private static bool IsDateTimeChoice(Clause clause) =>
-        (NowReadings.Contains(clause.Reading) || IsRelativeDateReading(clause.Reading)) && (clause.Text.Any(char.IsAsciiDigit) || clause.Text.EndsWith("曜日", StringComparison.Ordinal));
+        (NowReadings.Contains(clause.Reading) || IsRelativeDateReading(clause.Reading)) && IsDateText(clause.Text);
+
+    private static bool IsDateText(string text) =>
+        text.Any(char.IsDigit) || text.EndsWith("曜日", StringComparison.Ordinal)
+        || (text.Any(c => "〇一二三四五六七八九十".Contains(c)) && text.All(c => "〇一二三四五六七八九十年月日".Contains(c)));
 
     /// <summary>絵文字・顔文字の候補を、最後に並べる順 (逆順: いちばんよく使うものが最後) で。</summary>
     private IEnumerable<string> EmojiBlock(string reading) =>
@@ -1689,7 +1698,9 @@ public sealed class CompositionController
         }
         if (converting) Learn();
         else LearnLanguage();
-        RememberPhrase(converting ? string.Concat(_clauses.Select(c => c.IsEnglish ? "" : c.Reading)) : _text.AllKana(final: true), text, english);
+        // 日付・時刻の候補を含む確定は予測変換にも覚えさせない (覚えると、後日、古い日付が予測に出る)。
+        if (!(converting && _clauses.Any(IsDateTimeChoice)))
+            RememberPhrase(converting ? string.Concat(_clauses.Select(c => c.IsEnglish ? "" : c.Reading)) : _text.AllKana(final: true), text, english);
         CommitText(text + suffix, english, _text.Raw, chosen, preserveText);
     }
 

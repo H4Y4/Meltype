@@ -614,6 +614,63 @@ internal static class CompositionTests
     }
 
     [Test]
+    public static void RelativeDates_AreNotRemembered_ByPrediction()
+    {
+        // 日付・年月・年の候補を確定しても、予測変換に覚えさせない (覚えると、後日、古い日付が予測に出る)。きょう も同じ
+        foreach (var (keys, date, prefix) in new[] { ("ashita ", "2026年10月10日", "ashi"), ("kotoshi ", "2026年", "koto"), ("kyou ", "2026年10月9日", "kyo"), ("kongetsu ", "2026年10月", "kon") })
+        {
+            var phrases = new PhraseHistory(null);
+            var k = new Keyboard(predictor: new Predictor(phrases, null, null), now: () => new DateTime(2026, 10, 9, 17, 22, 0));
+            k.Type(keys);
+            for (var i = 0; i < 50 && k.Showing != date; i++) k.Press(VirtualKeys.Space);
+            Assert.Equal(date, k.Showing, keys);
+            k.Press(VirtualKeys.Return);
+            Assert.Equal(date, k.Host.Document, keys);
+            Assert.Equal(0, phrases.Count, keys + "予測変換に覚えさせない");
+            k.Type(prefix);
+            Assert.True(k.Host.View!.Predictions?.Contains(date) != true, keys + "予測に日付が出ない");
+        }
+    }
+
+    [Test]
+    public static void RelativeDates_UsualWordsAreStillRemembered_ByPrediction()
+    {
+        // 日付ではない候補 (明日) は今までどおり予測変換に覚えさせる
+        var phrases = new PhraseHistory(null);
+        var k = new Keyboard(predictor: new Predictor(phrases, null, null), moreCandidates: _ => ["明日"], now: () => new DateTime(2026, 10, 9, 17, 22, 0));
+        k.Type("ashita ");
+        for (var i = 0; i < 50 && k.Showing != "明日"; i++) k.Press(VirtualKeys.Space);
+        Assert.Equal("明日", k.Showing);
+        k.Press(VirtualKeys.Return);
+        Assert.Equal(1, phrases.Count, "明日は覚える");
+    }
+
+    [Test]
+    public static void RelativeDates_FullWidthAndKanjiNumerals_AreNotLearned()
+    {
+        // 変換エンジンの候補一覧にある ２０２６年 (全角数字) や 二〇二六年 (漢数字) も日付なので学習しない。
+        // 数字を含まない普通の語 (明日) と、漢数字を含んでいても日付ではない語 (一昨日) は今までどおり学習する
+        foreach (var (keys, word, learned) in new[]
+        {
+            ("kotoshi ", "２０２６年", false), ("kotoshi ", "二〇二六年", false), ("ashita ", "２０２６年１０月１０日", false),
+            ("ashita ", "十月十日", false), ("ototoi ", "一昨日", true), ("ashita ", "明日", true),
+        })
+        {
+            var converter = new LearningConverter();
+            var phrases = new PhraseHistory(null);
+            var k = new Keyboard(converter: converter, predictor: new Predictor(phrases, null, null), moreCandidates: _ => [word], now: () => new DateTime(2026, 10, 9, 17, 22, 0));
+            k.Type(keys);
+            for (var i = 0; i < 50 && k.Showing != word; i++) k.Press(VirtualKeys.Space);
+            Assert.Equal(word, k.Showing, keys + word);
+            k.Press(VirtualKeys.Return);
+            for (var i = 0; i < 100 && converter.Learned.Count == 0 && learned; i++) Thread.Sleep(10);
+            if (!learned) Thread.Sleep(100);
+            Assert.Equal(learned, converter.Learned.Count > 0, word + " 変換エンジンの学習");
+            Assert.Equal(learned ? 1 : 0, phrases.Count, word + " 予測変換の学習");
+        }
+    }
+
+    [Test]
     public static void RelativeDates_AreNotLearned()
     {
         // 日付・年月・年の候補を選んで確定しても学習しない (次に打ったとき、古い日付が先頭に出ない)
