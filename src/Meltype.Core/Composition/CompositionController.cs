@@ -168,6 +168,9 @@ public sealed record CompositionOptions
     /// <summary>句読点の組み合わせ (設定)。</summary>
     public Func<Config.PunctuationStyle> Punctuation { get; init; } = () => Config.PunctuationStyle.Japanese;
 
+    /// <summary>入力中の Ctrl+キーの割り当て (設定)。</summary>
+    public Func<Config.ControlKeyStyle> ControlKeys { get; init; } = () => Config.ControlKeyStyle.Atok;
+
     /// <summary>ユーザーが英字 / かなに直した語の学習。</summary>
     public LanguageMemory? Languages { get; init; }
 
@@ -207,7 +210,7 @@ public sealed record CompositionOptions
 ///   ←→      → 文節を選ぶ (変換前に押しても文節の選択に入る) / Space・↓↑ でその文節の候補 / Shift+←→ で区切りを変える
 ///   Enter   → 確定してテキストボックスへ入力
 ///   BackSpace / Esc → 1 音削除 / 変換取り消し・入力取り消し
-///   F6 / F7 / F9 / F10, 半角/全角 → ひらがな / カタカナ / 全角英数 / 半角英数 (続けて押すと 大文字 → 先頭だけ大文字) / 日本語⇔英字
+///   F6 / F7 / F8 / F9 / F10, 半角/全角 → ひらがな / カタカナ / 半角カタカナ / 全角英数 / 半角英数 (続けて押すと 大文字 → 先頭だけ大文字) / 日本語⇔英字
 ///   その他のキー・クリック → 確定してからそのキーやクリックを通す
 /// 英数状態でも、打ち始めの数文字でローマ字 (日本語) かを判定し (打鍵は待たせずに送る)、日本語なら送った分を消して日本語入力に戻し、変換ボックスに入れる。
 /// UI スレッドだけで動く。フックからは CaptureGate 経由で入力が順番どおり届く。
@@ -464,6 +467,8 @@ public sealed class CompositionController
     private void HandleKey(KeyEvent e)
     {
         var vk = e.Vk;
+        // Mac 式の Ctrl+W/O/I は Shift+→/← の意味 (Shift を押しているのと同じに扱う)。
+        var controlShift = false;
         if (e.IsUp)
         {
             _swallowedShift.Remove(vk);
@@ -521,10 +526,12 @@ public sealed class CompositionController
         }
         if (_swallowedControl.Count > 0)
         {
-            if (!_text.IsEmpty && ControlShortcut(vk) is { } function)
+            if (!_text.IsEmpty && ControlShortcut(e) is { } action)
             {
-                // Ctrl+U/I/O/P: F6/F7/F10/F9 と同じ (ATOK と同じ割り当て。続けて押すと大文字・小文字も切り替わる)。
-                vk = function;
+                // 割り当てのあるキー: 対応するキー (ATOK 式は Ctrl+U/I/O/P → F6/F7/F10/F9。続けて押すと大文字・小文字も切り替わる) と同じに扱う。
+                vk = action.Vk;
+                controlShift = action.Shift;
+                e = e with { Vk = vk };
             }
             else
             {
@@ -566,7 +573,7 @@ public sealed class CompositionController
             return;
         }
 
-        if (_converting && HandleConversionKey(vk)) return;
+        if (_converting && HandleConversionKey(vk, controlShift)) return;
 
         switch (vk)
         {
@@ -639,11 +646,12 @@ public sealed class CompositionController
                 return;
             case VirtualKeys.F6: SetMode(DisplayMode.Hiragana); return;
             case VirtualKeys.F7: SetMode(DisplayMode.Katakana); return;
+            case VirtualKeys.F8: SetMode(DisplayMode.HalfWidthKatakana); return;
             case VirtualKeys.F9: SetAlphanumericMode(DisplayMode.FullWidthAlphanumeric); return;
             case VirtualKeys.F10: SetAlphanumericMode(DisplayMode.HalfWidthAlphanumeric); return;
             case VirtualKeys.Left or VirtualKeys.Right or VirtualKeys.Up or VirtualKeys.Down when !_text.IsAlphanumeric:
                 // 変換前でも矢印キーで文節の選択に入る (Mac のライブ変換と同じ)。
-                EnterClauseSelection(vk);
+                EnterClauseSelection(vk, controlShift);
                 return;
         }
 
@@ -936,9 +944,9 @@ public sealed class CompositionController
     // ---- 変換 (文節) ----
 
     /// <summary>変換中だけ意味を持つキー。処理したら true。</summary>
-    private bool HandleConversionKey(int vk)
+    private bool HandleConversionKey(int vk, bool controlShift)
     {
-        var shift = _swallowedShift.Count > 0;
+        var shift = _swallowedShift.Count > 0 || controlShift;
         switch (vk)
         {
             case VirtualKeys.Space when shift || _host.IsShiftDown():
@@ -1018,11 +1026,11 @@ public sealed class CompositionController
     private string? MisspellingSuggestion() => FindMisspelling() is { } typo ? $"もしかして: {typo.Misspelling.Right}　<Tab>で修正" : null;
 
     /// <summary>変換前に矢印キーを押したとき: 文節に区切って、← なら最後の文節、→ なら最初の文節を選ぶ。</summary>
-    private void EnterClauseSelection(int vk)
+    private void EnterClauseSelection(int vk, bool controlShift)
     {
         StartConversion();
         if (!_converting) return;
-        var shift = _swallowedShift.Count > 0;
+        var shift = _swallowedShift.Count > 0 || controlShift;
         _selectedClause = vk == VirtualKeys.Left ? _clauses.Count - 1 : 0;
         if (shift && vk is VirtualKeys.Left or VirtualKeys.Right) Resize(vk == VirtualKeys.Left ? -1 : +1);
         else if (vk == VirtualKeys.Up) NextCandidate(-1);
@@ -1645,7 +1653,7 @@ public sealed class CompositionController
         var text = converting ? string.Concat(_clauses.Select(c => c.Text)) : CurrentDisplay(final: true);
         if (fixEnglish && !converting && _text.Mode == DisplayMode.Auto) text = FixEnglishTypo(text);
         var english = converting ? _clauses.All(c => c.IsEnglish) : _text.IsAlphanumericAt(final: true);
-        // F6 / F7 / F9 / F10 で、はっきり英字 / かなを選んで確定した語も、後から確定し直さない。
+        // F6 / F7 / F8 / F9 / F10 で、はっきり英字 / かなを選んで確定した語も、後から確定し直さない。
         var chosen = converting ? _clauses.Any(c => c.Changed) : _text.Mode != DisplayMode.Auto;
         if (_reconversion is { } selection)
         {
@@ -1729,7 +1737,7 @@ public sealed class CompositionController
             case DisplayMode.HalfWidthAlphanumeric or DisplayMode.FullWidthAlphanumeric when !automatic.All(s => s.IsEnglish):
                 memory.Remember(raw, english: true, explicitChoice: true);
                 break;
-            case DisplayMode.Hiragana or DisplayMode.Katakana when automatic.Any(s => s.IsEnglish):
+            case DisplayMode.Hiragana or DisplayMode.Katakana or DisplayMode.HalfWidthKatakana when automatic.Any(s => s.IsEnglish):
                 memory.Remember(raw, english: false, explicitChoice: true);
                 break;
             case DisplayMode.Auto when _text.LevelOverride is not null && automatic.All(s => s.IsEnglish):
@@ -2050,15 +2058,59 @@ public sealed class CompositionController
 
     private static bool IsControl(int vk) => vk is VirtualKeys.Control or VirtualKeys.LControl or VirtualKeys.RControl;
 
-    /// <summary>入力中の Ctrl+英字で、かな・英字を切り替えるもの (U ひらがな / I カタカナ / O 半角英数 / P 全角英数)。</summary>
-    private static int? ControlShortcut(int vk) => vk switch
+    /// <summary>入力中の Ctrl+キーで割り当てた動作: 同じ動作のキー (Shift 付きかどうかも)。</summary>
+    private readonly record struct ControlAction(int Vk, bool Shift = false);
+
+    // ---- 入力中の Ctrl キーの割り当て (設定 ControlKeys)。割り当てを変えるときは、この 3 つの表だけを直す ----
+
+    /// <summary>ATOK 式 (既定): Ctrl+U ひらがな / I カタカナ / O 半角英数 / P 全角英数。</summary>
+    private static readonly Dictionary<int, ControlAction> AtokControlKeys = new()
     {
-        'U' => VirtualKeys.F6,
-        'I' => VirtualKeys.F7,
-        'O' => VirtualKeys.F10,
-        'P' => VirtualKeys.F9,
-        _ => null,
+        ['U'] = new(VirtualKeys.F6),
+        ['I'] = new(VirtualKeys.F7),
+        ['O'] = new(VirtualKeys.F10),
+        ['P'] = new(VirtualKeys.F9),
     };
+
+    /// <summary>
+    /// Mac 式の英字キー。Apple のガイド「Macの日本語変換用のキーボードショートカット」の表のとおり (実機で要確認)。
+    /// 特に Ctrl+B = 次の文節 (→)・Ctrl+F = 前の文節 (←) は、Emacs の F = 前進とは逆だが、表の記載どおりにしている。
+    /// Ctrl+H (BackSpace) と Ctrl+V/R (候補のページ送り) は別の作業で扱うので、ここには入れない。
+    /// </summary>
+    private static readonly Dictionary<int, ControlAction> MacControlKeys = new()
+    {
+        ['J'] = new(VirtualKeys.F6),                 // ひらがな
+        ['K'] = new(VirtualKeys.F7),                 // カタカナ
+        ['L'] = new(VirtualKeys.F9),                 // 全角英字
+        ['N'] = new(VirtualKeys.Down),               // 次の候補
+        ['P'] = new(VirtualKeys.Up),                 // 前の候補
+        ['B'] = new(VirtualKeys.Right),              // 次の文節
+        ['F'] = new(VirtualKeys.Left),               // 前の文節
+        ['W'] = new(VirtualKeys.Right, Shift: true), // 選択文節を伸ばす
+        ['O'] = new(VirtualKeys.Right, Shift: true), // 選択文節を伸ばす
+        ['I'] = new(VirtualKeys.Left, Shift: true),  // 選択文節を縮める
+    };
+
+    /// <summary>
+    /// Mac 式の記号キー。配列によって仮想キーが違う (; は US が 0xBA・JIS が 0xBB) ので、キーが入力する文字で選ぶ。
+    /// Ctrl+; 半角カタカナ / Ctrl+: と Ctrl+' 半角英字。US 配列の : は Shift+; なので、Shift なしの Ctrl+' も使える。
+    /// </summary>
+    private static readonly Dictionary<char, ControlAction> MacControlChars = new()
+    {
+        [';'] = new(VirtualKeys.F8),
+        [':'] = new(VirtualKeys.F10),
+        ['\''] = new(VirtualKeys.F10),
+    };
+
+    /// <summary>入力中に Ctrl と一緒に押したキーの割り当て。無ければ null (確定してからアプリへ送る)。</summary>
+    private ControlAction? ControlShortcut(KeyEvent e)
+    {
+        if (_options.ControlKeys() != Config.ControlKeyStyle.Mac)
+            return AtokControlKeys.TryGetValue(e.Vk, out var atok) ? atok : null;
+        if (MacControlKeys.TryGetValue(e.Vk, out var mac)) return mac;
+        if (!VirtualKeys.IsLetter(e.Vk) && _host.CharFromKey(e, _swallowedShift.Count > 0) is { } c && MacControlChars.TryGetValue(c, out var symbol)) return symbol;
+        return null;
+    }
 
     private static bool IsCommandModifier(int vk) => VirtualKeys.IsModifier(vk) && !IsShift(vk);
 }

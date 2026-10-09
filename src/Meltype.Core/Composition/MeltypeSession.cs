@@ -172,6 +172,7 @@ public sealed class MeltypeSession
             SpaceAroundEnglish = () => settings.SpaceAroundEnglish,
             AutomaticEnglishSpacing = () => autoSpacing,
             Punctuation = () => settings.Punctuation,
+            ControlKeys = () => settings.ControlKeys,
             TranslationHistory = new TranslationHistory(AppPaths.TranslationHistoryFile),
         };
         return new MeltypeSession(detector, converter, options, () => settings);
