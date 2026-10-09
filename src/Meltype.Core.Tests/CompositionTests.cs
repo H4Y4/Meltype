@@ -1538,6 +1538,139 @@ internal static class CompositionTests
     }
 
     [Test]
+    public static void ZArrows_HjklTypeArrows()
+    {
+        // #234: macOS の日本語入力と同じく、z + h/j/k/l で矢印 (vi のカーソル移動と同じ向き)。Space で変換せずそのまま入る。
+        foreach (var (typed, arrow) in new[] { ("zh", "←"), ("zj", "↓"), ("zk", "↑"), ("zl", "→") })
+        {
+            var k = new Keyboard();
+            k.Type(typed);
+            Assert.Equal(arrow, k.Showing, $"「{typed}」");
+            k.Type("\n");
+            Assert.Equal(arrow, k.Host.Document, $"「{typed}」を確定");
+        }
+        // Space を押しても矢印のまま (変換候補にしない)
+        var space = new Keyboard();
+        space.Type("zl ");
+        Assert.Equal("→", space.Host.Document + space.Showing, "zl + Space");
+        // 日本語の中・英字に挟まれた矢印。ライブ変換の有無に関係なく、かなと矢印が英語の区間に飲み込まれない
+        foreach (var live in new[] { false, true })
+        {
+            var k = new Keyboard(live: live);
+            k.Type("kyouzlashita\n");
+            Assert.Equal("きょう→あした", k.Host.Document, $"kyouzlashita (live={live})");
+        }
+        foreach (var (typed, expected) in new[]
+        {
+            ("zlkyou", "→きょう"), ("zlzlkyou", "→→きょう"), ("zlhello", "→hello"), ("hellozlhello", "hello→hello"),
+            ("kyouzl", "きょう→"), ("kinzl", "きん→"), ("z/zl", "・→"),
+        })
+        {
+            var k = new Keyboard();
+            k.Type(typed + "\n");
+            Assert.Equal(expected, k.Host.Document, $"「{typed}」");
+        }
+        // 英字に挟まれても矢印は zl のまま確定されない (区間の分け方が違っても、A は あ になることがある)
+        var sandwiched = new Keyboard();
+        sandwiched.Type("AzlB\n");
+        Assert.True(sandwiched.Host.Document.Contains('→') && sandwiched.Host.Document.EndsWith('B') && !sandwiched.Host.Document.Contains('z'), $"AzlB: {sandwiched.Host.Document}");
+        // 英文の後ろ。空白で区切られた後の zl は矢印
+        var sentence = new Keyboard();
+        sentence.Type("hello zl\n");
+        Assert.Equal("hello →", sentence.Host.Document, "hello zl");
+    }
+
+    [Test]
+    public static void ZArrows_EnglishWordsAreKept()
+    {
+        // zz の後の l (puzzle・dazzle) と、ローマ字に読めなかった英字の後ろ (英単語の途中) は矢印にしない。
+        // (Space の判定には英単語の辞書を使うので、内蔵のスペルチェッカーを付けて確かめる)
+        var saved = Detector.SpellChecker;
+        Detector.SpellChecker = Detection.BuiltInWordChecker.Shared;
+        try
+        {
+            foreach (var word in new[] { "puzzle", "dazzle", "nozzle", "drizzle", "grizzly" })
+            {
+                var k = new Keyboard();
+                k.Type(word + " ");
+                Assert.Equal(word, (k.Host.Document + k.Showing).Trim(), $"「{word}」+ Space はそのまま");
+            }
+            foreach (var word in new[] { "puzzle", "dazzle", "nozzle", "drizzle", "grizzly", "githubzl", "testzl" })
+            {
+                var k = new Keyboard();
+                k.Type(word + "\n");
+                Assert.Equal(word, k.Host.Document, $"「{word}」はそのまま確定");
+            }
+        }
+        finally
+        {
+            Detector.SpellChecker = saved;
+        }
+        // 大文字の Z・H/J/K/L は矢印にしない
+        foreach (var typed in new[] { "Zl", "ZL", "zL", "zH" })
+        {
+            var k = new Keyboard();
+            k.Type(typed + "\n");
+            Assert.True(!k.Host.Document.Any(c => c is '←' or '↓' or '↑' or '→'), $"「{typed}」は矢印にしない: {k.Host.Document}");
+        }
+    }
+
+    [Test]
+    public static void ZArrows_BackSpaceF6F9F10()
+    {
+        // BackSpace は矢印 1 つ分 (zl の 2 文字) を消す
+        var back = new Keyboard();
+        back.Type("kyouzl");
+        Assert.Equal("きょう→", back.Showing);
+        back.Press(VirtualKeys.Back);
+        Assert.Equal("きょう", back.Showing, "矢印 1 つ分が消える");
+        // F10 / F9 で英字にすると打ったままの zl に戻る
+        var f10 = new Keyboard();
+        f10.Type("zl");
+        f10.Press(VirtualKeys.F10);
+        Assert.Equal("zl", f10.Showing, "F10");
+        f10.Press(VirtualKeys.F10);
+        Assert.Equal("ZL", f10.Showing, "F10 をもう一度 (大文字)");
+        var f9 = new Keyboard();
+        f9.Type("kyouzl");
+        f9.Press(VirtualKeys.F9);
+        Assert.Equal("ｋｙｏｕｚｌ", f9.Showing, "F9");
+        f9.Press(VirtualKeys.F10);
+        Assert.Equal("kyouzl", f9.Showing, "F10");
+        // F6 / F7 は矢印のまま (ひらがな・カタカナの変換対象ではない)
+        var f6 = new Keyboard();
+        f6.Type("kyouzl");
+        f6.Press(VirtualKeys.F7);
+        Assert.Equal("キョウ→", f6.Showing, "F7");
+        f6.Press(VirtualKeys.F6);
+        Assert.Equal("きょう→", f6.Showing, "F6");
+    }
+
+    [Test]
+    public static void ZArrows_UserRomajiTableWins()
+    {
+        // ユーザーのローマ字の表 (romaji.txt) に zl があれば、矢印にせずユーザーの表を使う
+        var directory = Path.Combine(Path.GetTempPath(), "meltype-zarrow-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            File.WriteAllText(Path.Combine(directory, "romaji.txt"), "zl\tざ\n");
+            var text = new CompositionText(CompositionDetector.CreateDefault(directory));
+            foreach (var c in "zl") text.Append(c);
+            Assert.Equal("ざ", text.AllKana(final: true), "ユーザーの表の zl");
+            Assert.True(!text.Units.Any(u => u.Kana == "→"), "矢印にしない");
+            // 表にない zh は矢印のまま
+            var other = new CompositionText(CompositionDetector.CreateDefault(directory));
+            foreach (var c in "zh") other.Append(c);
+            Assert.Equal("←", other.AllKana(final: true), "表にない zh");
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Test]
     public static void BuiltInPhrases_AreSplitOut()
     {
         // 報告: 白馬の王子様 → ハクバノ王子サマ、ばらまいてた愛 → ばらまいて他愛

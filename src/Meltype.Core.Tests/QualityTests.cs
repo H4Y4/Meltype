@@ -63,6 +63,8 @@ internal static class Quality
         new("日本語", "toukyouniiku", "とうきょうにいく"),
         new("日本語", "kore ha pen desu", "これはぺんです"),
         new("日本語", "sore de ii", "それでいい"),
+        new("日本語", "kyouzlashita", "きょう→あした"),
+        new("日本語", "zl", "→"),
         new("日本語", "watashi ha sushi ga suki", "わたしはすしがすき"),
         new("日本語", "nani wo shiteru no", "なにをしてるの"),
 

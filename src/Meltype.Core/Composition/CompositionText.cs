@@ -16,7 +16,11 @@ public enum LetterCase { AsTyped, Upper, Capitalized }
 /// 変換ボックス内の 1 単位。ローマ字 1 音 (きょ, っ, ん …)・ローマ字として読めなかった英字 1 文字・記号 1 文字のいずれか。
 /// Raw は実際に打った文字 (英語として表示するときに使う)。
 /// </summary>
-public readonly record struct CompositionUnit(string Kana, string Raw);
+public readonly record struct CompositionUnit(string Kana, string Raw)
+{
+    /// <summary>z + h/j/k/l の矢印 (Raw は zh・zj・zk・zl)。英字の並びではなく、z/ などの記号と同じ扱いにする。</summary>
+    public bool IsArrow => Raw.Length == 2 && Raw[0] == 'z' && Kana is "←" or "↓" or "↑" or "→";
+}
 
 /// <summary>表示上のひとまとまり。英語と判定した区間は英字のまま、それ以外は日本語 (かな/漢字)。</summary>
 public readonly record struct CompositionSegment(bool IsEnglish, string Kana, string Raw)
@@ -158,6 +162,17 @@ public sealed class CompositionText
             {
                 foreach (var letter in _pending.ToString()) _units.Add(new CompositionUnit(letter.ToString(), letter.ToString()));
                 _pending.Clear();
+            }
+            // z + h/j/k/l で矢印 (macOS の日本語入力と同じ: zh ←、zj ↓、zk ↑、zl →)。
+            // 英単語 (puzzle・dazzle の zz の後の l) と、ローマ字として読めなかった英字の後ろ (英単語の途中) は矢印にしない。
+            // ユーザーのローマ字の表に zh などがあれば、ユーザーの表を優先する。
+            if (_pending.Length == 1 && _pending[0] == 'z' && ZArrow(c) is { } arrow && CanFollowArrow() &&
+                !_detector.Romaji.HasCustomSpelling("z" + c))
+            {
+                _pending.Clear();
+                Normalize(final: true);
+                _units.Add(new CompositionUnit(arrow.ToString(), "z" + c));
+                return;
             }
             _pending.Append(c);
             SplitUnitAfterNumber(final: false);
@@ -430,7 +445,7 @@ public sealed class CompositionText
     {
         // 最後の数字の位置 (その後ろが英字だけのとき)
         var digit = _units.Count - 1;
-        while (digit >= 0 && IsLetters(_units[digit].Raw)) digit--;
+        while (digit >= 0 && IsLetters(_units[digit])) digit--;
         if (digit < 0 || _units[digit].Raw is not [var d] || !char.IsAsciiDigit(d)) return;
         var run = string.Concat(_units.Skip(digit + 1).Select(u => u.Raw)) + _pending;
         var lower = run.ToLowerInvariant();
@@ -963,14 +978,14 @@ public sealed class CompositionText
         var start = 0;
         while (start < _units.Count)
         {
-            if (!IsLetters(_units[start].Raw) || IsLaughter(_units[start]))
+            if (!IsLetters(_units[start]) || IsLaughter(_units[start]))
             {
                 offset += _units[start].Raw.Length;
                 start++;
                 continue;
             }
             var end = start;
-            while (end < _units.Count && IsLetters(_units[end].Raw) && !IsLaughter(_units[end])) end++;
+            while (end < _units.Count && IsLetters(_units[end]) && !IsLaughter(_units[end])) end++;
             var atEnd = end == _units.Count;
             var letters = string.Concat(_units.Skip(start).Take(end - start).Select(u => u.Raw)) + (atEnd ? Pending : "");
             var runOffset = offset;
@@ -1017,13 +1032,13 @@ public sealed class CompositionText
         var withPending = _pending.Length > 0;
         while (end > 0 || withPending)
         {
-            if (!withPending && !IsLetters(_units[end - 1].Raw))
+            if (!withPending && !IsLetters(_units[end - 1]))
             {
                 end--;
                 continue;
             }
             var runStart = end;
-            while (runStart > 0 && IsLetters(_units[runStart - 1].Raw)) runStart--;
+            while (runStart > 0 && IsLetters(_units[runStart - 1])) runStart--;
             KeepLaughterAt(end, withPending);
             withPending = false;
             end = runStart;
@@ -1051,7 +1066,7 @@ public sealed class CompositionText
         for (var i = start - 1; i >= 0 && _units[i].Raw.Length > 0 && _units[i].Raw.All(char.IsAsciiLetter); i--)
         {
             letters = _units[i].Raw + letters;
-            var runStart = i == 0 || !IsLetters(_units[i - 1].Raw);
+            var runStart = i == 0 || !IsLetters(_units[i - 1]);
             if (letters.Length >= 3 && (runStart ? _detector.IsKnownEnglishWord(letters) : _detector.IsListedEnglishWord(letters.ToLowerInvariant()))) return end;
         }
         _units.RemoveRange(start, end - start);
@@ -1100,6 +1115,9 @@ public sealed class CompositionText
         }
         return false;
     }
+
+    /// <summary>英字の単位か。z + h/j/k/l の矢印 (Raw は zl) は英字の並びに入れない (打ち間違いとして直さない)。</summary>
+    private static bool IsLetters(CompositionUnit unit) => IsLetters(unit.Raw) && !unit.IsArrow;
 
     private static bool IsLetters(string raw) => raw.Length > 0 && raw.All(char.IsAsciiLetter);
 
@@ -1202,6 +1220,25 @@ public sealed class CompositionText
         ']' => '』',
         _ => null,
     };
+
+    /// <summary>z + 小文字の h/j/k/l の矢印 (macOS の日本語入力と同じ。vi のカーソル移動と同じ向き)。</summary>
+    private static char? ZArrow(char c) => c switch
+    {
+        'h' => '←',
+        'j' => '↓',
+        'k' => '↑',
+        'l' => '→',
+        _ => null,
+    };
+
+    /// <summary>z + h/j/k/l を矢印にしてよい位置か。入力の始め・記号の後ろ・ローマ字から読めたかなの後ろ。zz からできた っ (puzzle) と読めなかった英字 (英単語の途中) の後ろは除く。</summary>
+    private bool CanFollowArrow()
+    {
+        if (_units.Count == 0) return true;
+        var last = _units[^1];
+        if (last is { Raw: "z", Kana: "っ" }) return false;
+        return !(last.Raw.Length == 1 && char.IsAsciiLetter(last.Raw[0]) && last.Kana == last.Raw);
+    }
 
     public static string ToKatakana(string hiragana)
     {

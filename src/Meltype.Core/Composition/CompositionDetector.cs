@@ -93,6 +93,8 @@ public sealed partial class CompositionDetector
         // 連結した原文と各位置のオフセットを使い回す (内容・順序は同じで、文字列を毎回連結しない)。
         Prepare(units);
         var token = Raw(units, 0, units.Count) + pending;
+        // 矢印 (zl) を含む入力は、全体をひとつの英単語・英字の並びとしては見ない (区間ごとに見る)。
+        var hasArrow = _preparedArrows[units.Count] > 0;
         // Structured Latin tokens are opaque; their components are not Japanese readings.
         if (!kanaInput && token.All(c => c is >= '!' and <= '~') &&
             (token.Contains('@') && token.Any(char.IsAsciiLetter) || token.Contains('_') || token.Contains("://", StringComparison.Ordinal) ||
@@ -100,7 +102,7 @@ public sealed partial class CompositionDetector
             return [new CompositionSegment(true, "", token)];
         // A romaji token can cross an English boundary (reflect + sa becomes tsa).
         // Recognize an unambiguous English verb before parsing its Japanese conjugation.
-        if (!kanaInput && level != DetectionLevel.Manual)
+        if (!kanaInput && !hasArrow && level != DetectionLevel.Manual)
         {
             var raw = Raw(units, 0, units.Count) + pending;
             // Require two recognized words around a particle: never split arbitrary names
@@ -141,6 +143,7 @@ public sealed partial class CompositionDetector
         // 途中の区間 (… flow) だけを英語にすると「sたcこvえrflow」のようになってしまう。
         // ただし先頭が辞書の英単語として区切れている (github に push) ならその区切りを使う。
         var whole = Raw(units, 0, units.Count) + pending;
+        if (hasArrow) return segments;
         if (UnknownWordThenJapanese(units, pending, segments, level, whole) is { } split) return split;
         if (level != DetectionLevel.Manual && !segments[0].IsEnglish && Memory?.Get(whole.ToLowerInvariant()) != false && IsUnknownEnglishWord(whole))
         {
@@ -886,6 +889,8 @@ public sealed partial class CompositionDetector
     // 追加のスペルチェッカーは独自の訂正を持つため、従来の判定へ渡す。
     private bool CanBeEnglishSpan(int start, int end, string pending, bool growing, string? next)
     {
+        // z + h/j/k/l の矢印は英語の区間に入れない (zl のまま確定されないように)
+        if (_preparedArrows[end] != _preparedArrows[start]) return false;
         if (pending.Length > 0) return true;
         var from = _preparedRawOffsets[start];
         var length = _preparedRawOffsets[end] - from;
@@ -904,6 +909,7 @@ public sealed partial class CompositionDetector
     private int[] _preparedUpper = [];
     private int[] _preparedNonLetters = [];
     private int[] _preparedApostrophes = [];
+    private int[] _preparedArrows = [];
     private int[] _preparedUnreadable = [];
     private bool[] _preparedSymbolSuffix = [];
     private string _preparedRaw = "";
@@ -917,12 +923,15 @@ public sealed partial class CompositionDetector
         var upper = new int[units.Count + 1];
         var nonLetters = new int[units.Count + 1];
         var apostrophes = new int[units.Count + 1];
+        var arrows = new int[units.Count + 1];
         for (var i = 0; i < units.Count; i++)
         {
             upper[i + 1] = upper[i] + units[i].Raw.Count(char.IsAsciiLetterUpper);
             nonLetters[i + 1] = nonLetters[i] + units[i].Raw.Count(c => !char.IsAsciiLetter(c));
             apostrophes[i + 1] = apostrophes[i] + units[i].Raw.Count(c => c == '\'');
+            arrows[i + 1] = arrows[i] + (units[i].IsArrow ? 1 : 0);
         }
+        _preparedArrows = arrows;
         _preparedUpper = upper;
         _preparedNonLetters = nonLetters;
         _preparedApostrophes = apostrophes;
