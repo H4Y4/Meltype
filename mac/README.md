@@ -43,6 +43,7 @@ cd mac
 - F6 ひらがな / F7 カタカナ / F8 半角カタカナ / F9 全角英数 / F10 半角英数
 - `zh` `zj` `zk` `zl` で ← ↓ ↑ → (macOS 標準の日本語入力と同じ。`z/` → ・ などの z + 記号も使えます)
 - JIS キーボードの「英数」キーで英数 (直接入力)、「かな」キーで日本語に戻ります
+- 「英数」「かな」キーが無い US 配列などでは、Control+Shift+J で日本語、Control+Shift+; (または ') で英数に切り替えられます (macOS 標準の日本語入力と同じ。変換中の文字は確定してから英数になります)
 - 先頭か空白の直後に打った `/review`・`$skill`・`@ファイル名` は、空白まで変換せずにそのまま入ります (`SigilWordsDirect` で OFF)
 - 設定・学習データ・ユーザー辞書は `~/Library/Application Support/Meltype` (入力メニューの「Meltype のデータフォルダを開く」)。
   設定は Windows 版と同じ `config.json` です (自動判定の強さ `DetectionLevel` など)
