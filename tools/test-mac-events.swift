@@ -139,9 +139,9 @@ struct EventTests {
    precondition(!functionKey(controller,client,0xF728,code:kVK_ForwardDelete),"delete must pass through to the app")
    equal(client.document,"hello");equal(client.marked,"")
   }
-  check("F8 commits kana and passes through") { controller,client in
+  check("Unassigned function key (F13) commits kana and passes through") { controller,client in
    type(controller,client,"aiueo")
-   precondition(!functionKey(controller,client,0xF70B,code:kVK_F8),"unimplemented F8 must pass through to the app")
+   precondition(!functionKey(controller,client,0xF710,code:kVK_F13),"unassigned F13 must pass through to the app")
    equal(client.document,"あいうえお");equal(client.marked,"")
   }
   check("Option+Shift+K Apple logo stays a character") { controller,client in

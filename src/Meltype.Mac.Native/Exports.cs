@@ -128,6 +128,7 @@ public static unsafe class Exports
     /// macOS の NSEvent が機能キー (矢印・Delete・Home/End・PageUp/PageDown・F1〜F35 など) の characters に入れる私用領域の文字か。
     /// NSUpArrowFunctionKey (U+F700) 〜 NSModeSwitchFunctionKey (U+F747)。Swift 側 (InputController.swift) と同じ範囲。
     /// U+F8FF (Apple ロゴ) などその外の私用領域は、ふつうの文字として扱う。
+    /// Swift 側でも同じ範囲を除いているが、本体だけでも単体テストでき、Swift 以外の呼び出し元から呼ばれても安全なように、こちらでも二重に除く。
     /// </summary>
     private static bool IsMacFunctionKeyScalar(int ch) => ch is >= 0xF700 and <= 0xF747;
 
