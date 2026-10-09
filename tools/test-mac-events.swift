@@ -269,6 +269,12 @@ struct EventTests {
    precondition(!ctrl(controller,client,"\n","j",code:kVK_ANSI_J),"Ctrl+J must pass to the app")
    equal(client.document,"あいうえお"); equal(client.marked,"")
   }
+  check("ATOK style Ctrl+Shift+; (US) during composition commits and switches to direct input") { controller,client in
+   type(controller,client,"aiueo")
+   precondition(ctrl(controller,client,";",":",code:kVK_ANSI_Semicolon,shift:true),"Ctrl+Shift+; must be handled by the IME")
+   equal(client.document,"あいうえお"); equal(client.marked,"")
+   type(controller,client,"ka"); equal(client.document,"あいうえおka"); equal(client.marked,"")
+  }
   writeControlKeys("Mac")
   check("Mac style Ctrl+J / Ctrl+K / Ctrl+L") { controller,client in
    type(controller,client,"aiueo")
@@ -291,22 +297,32 @@ struct EventTests {
    precondition(ctrl(controller,client,"'","'",code:kVK_ANSI_Quote),"Ctrl+' must be consumed"); equal(client.marked,"aiueo")
    equal(client.document,"")
   }
-  // 英字への切り替えのキー (US 配列の Ctrl+Shift+'、JIS 配列の Ctrl+Shift+;) は割り当てが無く、本体は使わない
-  // (英数への切り替えは OS 側の処理に回る)。characters は Shift を無視する。
-  check("Mac style Ctrl+Shift+' (US) is not consumed") { controller,client in
+  // Ctrl+Shift+; ・ ' は英数への切り替え。変換中は先に本体へ渡し、Ctrl キーの割り当てが無ければ (本体が consumed=false で返す)
+  // 確定して英数に切り替える。characters は Shift を無視するが、charactersIgnoringModifiers は Shift を含む。
+  check("Mac style Ctrl+Shift+; (US, Ctrl+:) commits and switches to direct input") { controller,client in
    type(controller,client,"aiueo")
-   precondition(!ctrl(controller,client,"'","\"",code:kVK_ANSI_Quote,shift:true),"Ctrl+Shift+' (US) must pass")
+   precondition(ctrl(controller,client,";",":",code:kVK_ANSI_Semicolon,shift:true),"Ctrl+Shift+; (US) must be handled by the IME")
    equal(client.document,"あいうえお"); equal(client.marked,"")
+   type(controller,client,"ka"); equal(client.document,"あいうえおka"); equal(client.marked,"")
   }
-  check("Mac style Ctrl+Shift+; (JIS) is not consumed") { controller,client in
+  check("Mac style Ctrl+Shift+' (US) commits and switches to direct input") { controller,client in
    type(controller,client,"aiueo")
-   precondition(!ctrl(controller,client,";","+",code:kVK_ANSI_Semicolon,shift:true),"Ctrl+Shift+; (JIS) must pass")
+   precondition(ctrl(controller,client,"'","\"",code:kVK_ANSI_Quote,shift:true),"Ctrl+Shift+' (US) must be handled by the IME")
    equal(client.document,"あいうえお"); equal(client.marked,"")
+   type(controller,client,"ka"); equal(client.document,"あいうえおka"); equal(client.marked,"")
   }
-  check("Mac style Ctrl+Shift+; (US, Ctrl+:) is not consumed") { controller,client in
+  check("Mac style Ctrl+Shift+; (JIS) commits and switches to direct input") { controller,client in
    type(controller,client,"aiueo")
-   precondition(!ctrl(controller,client,";",":",code:kVK_ANSI_Semicolon,shift:true),"Ctrl+: (US) must pass")
+   precondition(ctrl(controller,client,";","+",code:kVK_ANSI_Semicolon,shift:true),"Ctrl+Shift+; (JIS) must be handled by the IME")
    equal(client.document,"あいうえお"); equal(client.marked,"")
+   type(controller,client,"ka"); equal(client.document,"あいうえおka"); equal(client.marked,"")
+  }
+  check("Mac style Ctrl+: (JIS, no Shift) is half-width alphanumerics and stays Japanese") { controller,client in
+   type(controller,client,"aiueo")
+   precondition(ctrl(controller,client,"'",":",code:kVK_ANSI_Quote),"Ctrl+: (JIS) must be consumed"); equal(client.marked,"aiueo")
+   equal(client.document,"")
+   // 英数に切り替わっていないので、続けて打った文字は変換中の文字に入る (アプリへは直接入らない)
+   type(controller,client,"ka"); equal(client.document,"")
   }
   check("Mac style Ctrl+N / Ctrl+F in an English word pass to the app") { controller,client in
    type(controller,client,"hello")
@@ -478,6 +494,31 @@ struct EventTests {
    _=key(controller,client,"",code:UInt16(kVK_PageDown)); page=(page+1)%pages
    _=key(controller,client,"1",code:UInt16(kVK_ANSI_1))
    equal(client.document,list[page*size])
+  }
+  // Mac 式の Ctrl+V / Ctrl+R は PageDown / PageUp と同じページ送り。候補ウィンドウの選択も本体の選択と合う。
+  check("Mac style Ctrl+V / Ctrl+R page candidates and keep window selection in sync") { controller,client in
+   writeControlKeys("Mac"); defer { if let originalConfig { try! originalConfig.write(to:configURL) } else { try? FileManager.default.removeItem(at:configURL) } }
+   guard let macController=MeltypeInputController(server:server,delegate:nil,client:nil) else {fatalError("Controller creation failed")}
+   NativeCore.shared.initialize()
+   let window=RecordingCandidates(server:server,panelType:kIMKSingleColumnScrollingCandidatePanel)!
+   candidatesWindow=window
+   defer {candidatesWindow=nil}
+   type(macController,client,"tsukue")
+   _=key(macController,client," ",code:UInt16(kVK_Space))
+   _=key(macController,client,"",code:UInt16(kVK_DownArrow)); _=key(macController,client,"",code:UInt16(kVK_UpArrow))
+   let list=(macController.candidates(nil) as? [String]) ?? []
+   precondition(list.count>18,"need 3+ pages: \(list)")
+   RunLoop.current.run(until:Date(timeIntervalSinceNow:0.05))
+   precondition(window.shown && window.position==0,"window starts at head")
+   precondition(ctrl(macController,client,"\u{16}","v",code:kVK_ANSI_V),"Ctrl+V must be consumed")
+   precondition(window.position==9,"Ctrl+V: window at \(window.position), expected 9")
+   precondition(ctrl(macController,client,"\u{16}","v",code:kVK_ANSI_V),"Ctrl+V must be consumed")
+   precondition(window.position==18,"Ctrl+V: window at \(window.position), expected 18")
+   precondition(ctrl(macController,client,"\u{12}","r",code:kVK_ANSI_R),"Ctrl+R must be consumed")
+   precondition(window.position==9,"Ctrl+R: window at \(window.position), expected 9")
+   // 本体の選択もウィンドウと同じ位置か: 数字キーの 1 で、そのページの先頭の候補が確定する。
+   _=key(macController,client,"1",code:UInt16(kVK_ANSI_1))
+   equal(client.document,list[9])
   }
   #endif
   print("\(passed) Mac event/integration cases passed (synthetic client; OS IME registration and app GUI NOT_RUN)")
