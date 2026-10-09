@@ -522,6 +522,114 @@ internal static class CompositionTests
         Assert.True(!other.Host.View!.Candidates.Contains("17:22"), "いま だけの文節のとき");
     }
 
+    [Test]
+    public static void RelativeDates_ShowDateCandidates()
+    {
+        // #208 の続き: きのう・おととい・あした・あす・あさって・しあさって も、きょう と同じ 7 つの形で日付を候補に出す
+        // 2026/10/9 は金曜日
+        Func<DateTime> now = () => new DateTime(2026, 10, 9, 17, 22, 0);
+        var cases = new (string Keys, string[] Expected)[]
+        {
+            ("kinou ", ["2026年10月8日", "2026年10月8日(木)", "10月8日", "10月8日(木)", "2026/10/08", "2026-10-08", "木曜日"]),
+            ("ototoi ", ["2026年10月7日", "2026年10月7日(水)", "10月7日", "10月7日(水)", "2026/10/07", "2026-10-07", "水曜日"]),
+            ("ashita ", ["2026年10月10日", "2026年10月10日(土)", "10月10日", "10月10日(土)", "2026/10/10", "2026-10-10", "土曜日"]),
+            ("asu ", ["2026年10月10日", "2026年10月10日(土)", "10月10日", "10月10日(土)", "2026/10/10", "2026-10-10", "土曜日"]),
+            ("asatte ", ["2026年10月11日", "2026年10月11日(日)", "10月11日", "10月11日(日)", "2026/10/11", "2026-10-11", "日曜日"]),
+            ("shiasatte ", ["2026年10月12日", "2026年10月12日(月)", "10月12日", "10月12日(月)", "2026/10/12", "2026-10-12", "月曜日"]),
+        };
+        foreach (var (keys, expected) in cases)
+        {
+            var k = new Keyboard(now: now);
+            k.Type(keys);
+            var candidates = k.Host.View!.Candidates;
+            foreach (var e in expected) Assert.True(candidates.Contains(e), keys + e + ": " + string.Join(" ", candidates));
+        }
+    }
+
+    [Test]
+    public static void RelativeDates_CrossMonthYearAndLeapDay()
+    {
+        // 月末・月初・年末・うるう年をまたぐ
+        var cases = new (DateTime Now, string Keys, string Expected)[]
+        {
+            (new DateTime(2026, 3, 1, 9, 0, 0), "kinou ", "2026年2月28日"),
+            (new DateTime(2028, 3, 1, 9, 0, 0), "kinou ", "2028年2月29日"),
+            (new DateTime(2026, 10, 31, 9, 0, 0), "ashita ", "2026年11月1日"),
+            (new DateTime(2026, 12, 31, 9, 0, 0), "asatte ", "2027年1月2日"),
+            (new DateTime(2027, 1, 1, 9, 0, 0), "ototoi ", "2026年12月30日"),
+            (new DateTime(2027, 1, 1, 9, 0, 0), "kinou ", "2026-12-31"),
+            (new DateTime(2026, 12, 29, 9, 0, 0), "shiasatte ", "2027/01/01"),
+            (new DateTime(2027, 1, 31, 9, 0, 0), "raigetsu ", "2027年2月"),
+            (new DateTime(2028, 1, 31, 9, 0, 0), "raigetsu ", "2028/02"),
+            (new DateTime(2026, 3, 31, 9, 0, 0), "sengetsu ", "2026-02"),
+            (new DateTime(2026, 12, 15, 9, 0, 0), "raigetsu ", "2027年1月"),
+            (new DateTime(2026, 1, 15, 9, 0, 0), "sengetsu ", "2025年12月"),
+            (new DateTime(2026, 1, 1, 9, 0, 0), "kyonen ", "2025年"),
+            (new DateTime(2024, 2, 29, 9, 0, 0), "rainen ", "2025"),
+        };
+        foreach (var (date, keys, expected) in cases)
+        {
+            var k = new Keyboard(now: () => date);
+            k.Type(keys);
+            Assert.True(k.Host.View!.Candidates.Contains(expected), $"{date:yyyy-MM-dd} {keys}{expected}: " + string.Join(" ", k.Host.View!.Candidates));
+        }
+    }
+
+    [Test]
+    public static void RelativeMonthsAndYears_ShowCandidates()
+    {
+        Func<DateTime> now = () => new DateTime(2026, 10, 9, 17, 22, 0);
+        var cases = new (string Keys, string[] Expected)[]
+        {
+            ("kongetsu ", ["2026年10月", "10月", "2026/10", "2026-10"]),
+            ("sengetsu ", ["2026年9月", "9月", "2026/09", "2026-09"]),
+            ("raigetsu ", ["2026年11月", "11月", "2026/11", "2026-11"]),
+            ("kotoshi ", ["2026年", "2026"]),
+            ("kyonen ", ["2025年", "2025"]),
+            ("rainen ", ["2027年", "2027"]),
+        };
+        foreach (var (keys, expected) in cases)
+        {
+            var k = new Keyboard(now: now);
+            k.Type(keys);
+            var candidates = k.Host.View!.Candidates;
+            foreach (var e in expected) Assert.True(candidates.Contains(e), keys + e + ": " + string.Join(" ", candidates));
+        }
+    }
+
+    [Test]
+    public static void RelativeDates_KeepUsualCandidatesFirst()
+    {
+        // いつもの変換候補は変えず、日付の候補はかな・カタカナ・半角カナの後ろに足す (テストの辞書では先頭はかなのまま)
+        foreach (var (keys, reading) in new[] { ("ashita ", "あした"), ("kinou ", "きのう"), ("kotoshi ", "ことし"), ("raigetsu ", "らいげつ") })
+        {
+            var plain = new Keyboard(now: () => new DateTime(2026, 10, 9, 17, 22, 0));
+            plain.Type(keys);
+            var candidates = plain.Host.View!.Candidates.ToList();
+            Assert.Equal(reading, candidates[0], keys + string.Join(" ", candidates));
+            var kana = candidates.IndexOf(CompositionText.ToHalfWidthKatakana(CompositionText.ToKatakana(reading)));
+            var firstDate = candidates.FindIndex(c => c.Any(char.IsAsciiDigit));
+            Assert.True(kana >= 0 && firstDate > kana, keys + "日付はかなの後ろ: " + string.Join(" ", candidates));
+        }
+    }
+
+    [Test]
+    public static void RelativeDates_AreNotLearned()
+    {
+        // 日付・年月・年の候補を選んで確定しても学習しない (次に打ったとき、古い日付が先頭に出ない)
+        foreach (var (keys, date) in new[] { ("ashita ", "2026/10/10"), ("kinou ", "2026年10月8日"), ("kongetsu ", "2026-10"), ("kotoshi ", "2026年") })
+        {
+            var k = new Keyboard(now: () => new DateTime(2026, 10, 9, 17, 22, 0));
+            k.Type(keys);
+            for (var i = 0; i < 50 && k.Showing != date; i++) k.Press(VirtualKeys.Space);
+            Assert.Equal(date, k.Showing, keys);
+            k.Press(VirtualKeys.Return);
+            Assert.Equal(date, k.Host.Document, keys);
+            k.Type(keys);
+            Assert.True(k.Showing != date && !k.Host.View!.Candidates[0].Any(char.IsAsciiDigit), keys + "もう一度: " + string.Join(" ", k.Host.View!.Candidates));
+        }
+    }
+
       [Test]
       public static void ShiftSpace_DuringConversion_GoesBack()
       {
