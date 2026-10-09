@@ -135,6 +135,19 @@ struct EventTests {
    equal(client.document,"@kuraido");equal(client.marked,"")
    type(controller,client,"ka");equal(client.document,"@kuraidoka")
   }
+  check("Ctrl+Shift+' commits composition first") { controller,client in
+   type(controller,client,"@kuraido");precondition(client.marked != "")
+   precondition(key(controller,client,"'",code:UInt16(kVK_ANSI_Quote),flags:ctrlShift))
+   equal(client.document,"@kuraido");equal(client.marked,"")
+   type(controller,client,"ka");equal(client.document,"@kuraidoka")
+  }
+  check("Ctrl+Shift+; during composition does not pass the key to the app") { controller,client in
+   type(controller,client,"@kuraido")
+   precondition(key(controller,client,";",code:UInt16(kVK_ANSI_Semicolon),flags:ctrlShift))
+   equal(client.document,"@kuraido")
+   type(controller,client,"ka");equal(client.document,"@kuraidoka");equal(client.marked,"")
+   precondition(!client.document.contains(";") && !client.document.contains("'"))
+  }
   check("Ctrl+J and Cmd+Shift+J are not mode keys") { controller,client in
    _=key(controller,client,"",code:UInt16(kVK_JIS_Eisu));type(controller,client,"ka")
    // Shift なしの Ctrl+J・Command / Option 付きは対象外 (キーを使わず、直接入力のまま)。

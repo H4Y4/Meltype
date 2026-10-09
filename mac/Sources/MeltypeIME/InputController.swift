@@ -80,6 +80,18 @@ final class MeltypeInputController: IMKInputController {
                 switchToJapanese()
                 return true
             case kVK_ANSI_Semicolon, kVK_ANSI_Quote:
+                // 変換中は、まず普通のキーとして本体へ渡す。Ctrl キーの割り当て (Mac 式の Ctrl+: = 半角英字に変換など) が
+                // 本体にあればそちらを先にする。こうすると、割り当てがあるかどうかを Swift 側が設定ファイルまで見て調べなくて済む。
+                // 割り当てが無いときの本体は、未確定の内容を確定して「アプリへ通す」(consumed=false) と返すので、
+                // そのキーはアプリへ通さず、確定はもう済んでいるのでもう一度 commit せずに英数へ切り替える。
+                if hasMarkedText, let vk = KeyMapping.virtualKey(for: event),
+                   let result = sendToCore(event, vk: vk, client: client) {
+                    apply(result, to: client)
+                    if result.consumed { return true }
+                    directInput = true
+                    NativeCore.shared.setDirect(session, true)
+                    return true
+                }
                 switchToDirectInput(client)
                 return true
             default:
@@ -92,11 +104,19 @@ final class MeltypeInputController: IMKInputController {
         // (補助面の文字・結合文字・ZWJ 絵文字・異体字セレクター)。1 要素へ切り詰めたり 0 に置き換えたりしない。
         // 1 スカラーならそのコードポイントのまま本体へ渡し、複数スカラーは未確定内容だけ確定して
         // 元のイベントを 1 回アプリへ通す (本体側の pass-through 契約と対にする)。
-        let scalars = Array((event.characters ?? "").unicodeScalars)
-        if scalars.count > 1 {
+        if (event.characters ?? "").unicodeScalars.count > 1 {
             apply(NativeCore.shared.commitBeforeExternalText(session, text: event.characters ?? ""), to: client)
             return false
         }
+        guard let result = sendToCore(event, vk: vk, client: client) else { return false }
+        apply(result, to: client)
+        return result.consumed
+    }
+
+    /// キーを本体へ渡して結果を返す (入力欄への反映は呼び出し側が apply で行う)。
+    /// character は event.characters の 1 スカラー (無ければ 0)。modifiers は Shift=1・Control=2・Option=4・Command=8。
+    private func sendToCore(_ event: NSEvent, vk: Int32, client: IMKTextInput) -> SessionResult? {
+        let scalars = Array((event.characters ?? "").unicodeScalars)
         let character: Int32 = scalars.count == 1 ? Int32(scalars[0].value) : 0
         let flags = event.modifierFlags
         var modifiers: Int32 = 0
@@ -106,11 +126,7 @@ final class MeltypeInputController: IMKInputController {
         if flags.contains(.command) { modifiers |= 8 }
 
         let (before, after) = hasMarkedText ? (nil, nil) : surroundingText(of: client)
-        guard let result = NativeCore.shared.handleKey(session, vk: vk, character: character, modifiers: modifiers, before: before, after: after) else {
-            return false
-        }
-        apply(result, to: client)
-        return result.consumed
+        return NativeCore.shared.handleKey(session, vk: vk, character: character, modifiers: modifiers, before: before, after: after)
     }
 
     /// フォーカスが外れた・クリックで別の場所に移ったときなど。未確定の内容をそのまま確定する。
