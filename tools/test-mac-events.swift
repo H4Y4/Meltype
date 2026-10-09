@@ -6,11 +6,26 @@ import InputMethodKit
 import Carbon.HIToolbox
 final class EventClient: NSObject, IMKTextInput {
  var document=""; var marked=""
+ // 選択範囲 (nil なら従来どおり、文書の終わりにキャレットがあるだけ)。marked は markedLocation の位置にある変換中の文字 (document には含めない)。
+ var selection:NSRange?=nil; var markedLocation=0
+ var caret:Int {selection?.location ?? (document as NSString).length}
  func text(_ value:Any?)->String { (value as? NSAttributedString)?.string ?? (value as? String ?? "") }
- func insertText(_ string: Any!, replacementRange: NSRange) { let value=text(string); if replacementRange.location != NSNotFound { document=(document as NSString).replacingCharacters(in:replacementRange,with:value) } else {document+=value}; marked="" }
- func setMarkedText(_ string: Any!, selectionRange: NSRange, replacementRange: NSRange) {marked=text(string)}
- func selectedRange()->NSRange {NSRange(location:(document as NSString).length,length:0)}
- func markedRange()->NSRange {marked.isEmpty ? NSRange(location:NSNotFound,length:0):NSRange(location:(document as NSString).length,length:(marked as NSString).length)}
+ func insertText(_ string: Any!, replacementRange: NSRange) {
+  let value=text(string)
+  if replacementRange.location != NSNotFound { document=(document as NSString).replacingCharacters(in:replacementRange,with:value) }
+  else if !marked.isEmpty { document=(document as NSString).replacingCharacters(in:NSRange(location:markedLocation,length:0),with:value); selection=selection.map{_ in NSRange(location:markedLocation+(value as NSString).length,length:0)} }
+  else if let selection { document=(document as NSString).replacingCharacters(in:selection,with:value); self.selection=NSRange(location:selection.location+(value as NSString).length,length:0) }
+  else {document+=value}
+  marked=""
+ }
+ func setMarkedText(_ string: Any!, selectionRange: NSRange, replacementRange: NSRange) {
+  let value=text(string)
+  // 変換中でなければ、今の選択範囲は変換中の文字に置き換わる (IMK の挙動)。
+  if marked.isEmpty && !value.isEmpty { if let selection { document=(document as NSString).replacingCharacters(in:selection,with:""); markedLocation=selection.location; self.selection=NSRange(location:selection.location,length:0) } else { markedLocation=(document as NSString).length } }
+  marked=value
+ }
+ func selectedRange()->NSRange {marked.isEmpty ? (selection ?? NSRange(location:(document as NSString).length,length:0)) : NSRange(location:markedLocation+(marked as NSString).length,length:0)}
+ func markedRange()->NSRange {marked.isEmpty ? NSRange(location:NSNotFound,length:0):NSRange(location:markedLocation,length:(marked as NSString).length)}
  func attributedSubstring(from range:NSRange)->NSAttributedString! { let text=document as NSString; guard range.location != NSNotFound && range.location<=text.length else{return nil}; return NSAttributedString(string:text.substring(with:NSRange(location:range.location,length:min(range.length,text.length-range.location)))) }
  func length()->Int {(document as NSString).length}
  func characterIndex(for point:NSPoint, tracking mode:IMKLocationToOffsetMappingMode, inMarkedRange:UnsafeMutablePointer<ObjCBool>!)->Int {inMarkedRange?.pointee=false; return 0}
@@ -116,6 +131,66 @@ struct EventTests {
   }
   check("Command shortcut commits once") { controller,client in
    type(controller,client,"@kuraido");precondition(!key(controller,client,"a",flags:.command));equal(client.document,"@kuraido");equal(client.marked,"")
+  }
+  // ---- 選択した文字の再変換 (Control+Shift+R) ----
+  // 変換エンジンの結果には依存せず、「変換中の文字になり、Enter で選択範囲を置き換える・Esc で元に戻る」を確かめる。
+  func reconvert(_ controller:MeltypeInputController,_ client:EventClient)->Bool {
+   key(controller,client,"\u{12}",code:UInt16(kVK_ANSI_R),flags:[.control,.shift])
+  }
+  for (original,label) in [("今日","漢字"),("きょう","ひらがな"),("キョウ","カタカナ")] {
+   check("reconversion Enter replaces selection (\(label))") { controller,client in
+    client.document="さっき"+original+"は晴れ"; client.selection=NSRange(location:3,length:(original as NSString).length)
+    precondition(reconvert(controller,client),"Control+Shift+R with a selection must be consumed")
+    precondition(!client.marked.isEmpty,"reconversion must show marked text"); equal(client.document,"さっきは晴れ")
+    let shown=client.marked
+    precondition(key(controller,client,"\r",code:UInt16(kVK_Return)),"Enter must commit")
+    equal(client.document,"さっき"+shown+"は晴れ"); equal(client.marked,"")
+   }
+   check("reconversion Esc restores selection text (\(label))") { controller,client in
+    client.document="さっき"+original+"は晴れ"; client.selection=NSRange(location:3,length:(original as NSString).length)
+    precondition(reconvert(controller,client),"must start")
+    precondition(key(controller,client,"\u{1B}",code:UInt16(kVK_Escape)),"Esc must cancel")
+    equal(client.document,"さっき"+original+"は晴れ"); equal(client.marked,"")
+    // 取り消したあとは普通に入力できる
+    type(controller,client,"ka");_=key(controller,client,"\r",code:UInt16(kVK_Return));precondition(client.document.contains("か"),"typing works after cancel")
+   }
+  }
+  check("reconversion Backspace until empty restores selection text") { controller,client in
+   client.document="今日は"; client.selection=NSRange(location:0,length:2)
+   precondition(reconvert(controller,client),"must start")
+   for _ in 0..<10 where !client.marked.isEmpty { _=key(controller,client,"",code:UInt16(kVK_Delete)) }
+   equal(client.marked,""); equal(client.document,"今日は")
+  }
+  check("reconversion focus loss commits the replacement") { controller,client in
+   client.document="今日は"; client.selection=NSRange(location:0,length:2)
+   precondition(reconvert(controller,client),"must start")
+   let shown=client.marked; controller.commitComposition(client)
+   equal(client.document,shown+"は"); equal(client.marked,"")
+  }
+  for (document,selection,label) in [("今日",nil as NSRange?,"no selection"),("今日",NSRange(location:2,length:0),"caret only"),("hello",NSRange(location:0,length:5),"latin"),("今日 abc",NSRange(location:0,length:6),"mixed latin"),("今日\n明日",NSRange(location:0,length:5),"newline"),(String(repeating:"あ",count:129),NSRange(location:0,length:129),"too long")] {
+   check("reconversion passes through: \(label)") { controller,client in
+    client.document=document; client.selection=selection
+    precondition(!reconvert(controller,client),"Control+Shift+R must reach the app")
+    equal(client.document,document); equal(client.marked,"")
+   }
+  }
+  check("reconversion is not started in direct mode") { controller,client in
+   _=key(controller,client,"",code:UInt16(kVK_JIS_Eisu))
+   client.document="今日"; client.selection=NSRange(location:0,length:2)
+   precondition(!reconvert(controller,client),"direct mode must pass Control+Shift+R"); equal(client.document,"今日")
+  }
+  // 読みの推定の単体確認 (macOS の CFStringTokenizer の辞書に依存する)
+  check("reading estimation") { _,_ in
+   var lines:[String]=[]
+   for (text,expected) in [("今日","きょう"),("東京","とうきょう"),("食べる","たべる"),("学校へ行く","がっこうへいく"),("今日は","きょうは"),("大阪","おおさか"),("きょう","きょう"),("キョウ","きょう"),("コーヒー","こーひー"),("東京タワー","とうきょうたわー"),("今日、東京","きょう、とうきょう"),("「今日」","「きょう」")] {
+    let actual=Reconversion.reading(of:text); lines.append("\(text) -> \(actual ?? "nil")")
+    precondition(actual==expected,"reading of \(text): expected \(expected), got \(actual ?? "nil")")
+   }
+   for text in ["","abc","今日 abc","a今日","今日\n明日","１２３","今日 ","　"] {
+    let actual=Reconversion.reading(of:text); lines.append("\(text.debugDescription) -> \(actual ?? "nil")")
+    precondition(actual==nil,"reading of \(text.debugDescription) must be nil, got \(actual ?? "nil")")
+   }
+   print(lines.joined(separator:"\n"))
   }
   #if REAL_CONVERTER
   let converter=MeltypeConverter.shared

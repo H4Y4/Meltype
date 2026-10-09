@@ -15,6 +15,7 @@ private typealias DestroyFunction = @convention(c) (UnsafeMutableRawPointer?) ->
 private typealias HandleKeyFunction = @convention(c) (UnsafeMutableRawPointer?, Int32, Int32, Int32, UnsafePointer<CChar>?, UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>?
 private typealias CommitFunction = @convention(c) (UnsafeMutableRawPointer?) -> UnsafeMutablePointer<CChar>?
 private typealias SelectFunction = @convention(c) (UnsafeMutableRawPointer?, Int32) -> UnsafeMutablePointer<CChar>?
+private typealias ReconvertFunction = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?, UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>?
 private typealias SetDirectFunction = @convention(c) (UnsafeMutableRawPointer?, Int32) -> Void
 private typealias DataDirectoryFunction = @convention(c) () -> UnsafeMutablePointer<CChar>?
 private typealias ReportUrlFunction = @convention(c) (UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>?
@@ -100,6 +101,7 @@ final class NativeCore {
     private let handleKeyFunction: HandleKeyFunction?
     private let commitFunction: CommitFunction?
     private let selectFunction: SelectFunction?
+    private let reconvertFunction: ReconvertFunction?
     private let setDirectFunction: SetDirectFunction?
     private let setCodeInputFunction: SetDirectFunction?
     private let dataDirectoryFunction: DataDirectoryFunction?
@@ -124,6 +126,7 @@ final class NativeCore {
         handleKeyFunction = symbol("meltype_handle_key", as: HandleKeyFunction.self)
         commitFunction = symbol("meltype_commit", as: CommitFunction.self)
         selectFunction = symbol("meltype_select_candidate", as: SelectFunction.self)
+        reconvertFunction = symbol("meltype_reconvert", as: ReconvertFunction.self)
         setDirectFunction = symbol("meltype_set_direct", as: SetDirectFunction.self)
         setCodeInputFunction = symbol("meltype_set_code_input", as: SetDirectFunction.self)
         dataDirectoryFunction = symbol("meltype_data_directory", as: DataDirectoryFunction.self)
@@ -170,6 +173,16 @@ final class NativeCore {
     func selectCandidate(_ session: UnsafeMutableRawPointer?, index: Int) -> SessionResult? {
         guard let selectFunction else { return nil }
         return decode(selectFunction(session, Int32(index)))
+    }
+
+    /// 選択した文字 (text) とそのひらがなの読み (reading) で再変換を始める。始められなければ consumed が false の結果。
+    func reconvert(_ session: UnsafeMutableRawPointer?, text: String, reading: String) -> SessionResult? {
+        guard let reconvertFunction else { return nil }
+        return text.withCString { textPointer in
+            reading.withCString { readingPointer in
+                decode(reconvertFunction(session, textPointer, readingPointer))
+            }
+        }
     }
 
     func setDirect(_ session: UnsafeMutableRawPointer?, _ direct: Bool) {
