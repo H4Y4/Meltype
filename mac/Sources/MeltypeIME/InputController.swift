@@ -60,18 +60,31 @@ final class MeltypeInputController: IMKInputController {
         // JIS キーボードの「英数」「かな」キー: 英数 (直接入力) ⇔ 日本語。
         switch Int(event.keyCode) {
         case kVK_JIS_Eisu:
-            apply(NativeCore.shared.commit(session), to: client)
-            directInput = true
-            NativeCore.shared.setDirect(session, true)
+            switchToDirectInput(client)
             return true
         case kVK_JIS_Kana:
-            directInput = false
-            codeInput = false
-            NativeCore.shared.setCodeInput(session, false)
-            NativeCore.shared.setDirect(session, false)
+            switchToJapanese()
             return true
         default:
             break
+        }
+
+        // US 配列など「英数」「かな」キーが無いキーボード向けに、macOS 標準と同じ Control+Shift+J (日本語) /
+        // Control+Shift+; ・ ' (英数) でも切り替える。Command・Option が一緒のときは対象外。
+        // 文字は Shift で変わる (US の Shift+; は ":") ので、物理キーの位置 (keyCode) で判定する。
+        // JIS 配列の「;」キーは ANSI の ; と、「:」キーは ANSI の ' と同じ位置なので、同じ keyCode で拾える。
+        // Dvorak など配列が違うときも、刻印ではなく QWERTY 上の同じ位置のキーで反応する。
+        if event.modifierFlags.contains([.control, .shift]), event.modifierFlags.intersection([.command, .option]).isEmpty {
+            switch Int(event.keyCode) {
+            case kVK_ANSI_J:
+                switchToJapanese()
+                return true
+            case kVK_ANSI_Semicolon, kVK_ANSI_Quote:
+                switchToDirectInput(client)
+                return true
+            default:
+                break
+            }
         }
 
         guard let vk = KeyMapping.virtualKey(for: event) else { return false }
@@ -174,6 +187,21 @@ final class MeltypeInputController: IMKInputController {
         codeInput = code
         NativeCore.shared.setDirect(session, direct)
         NativeCore.shared.setCodeInput(session, code)
+    }
+
+    /// 「英数」キー・Control+Shift+; ・ ': 未確定を確定して、英数 (直接入力) にする。
+    private func switchToDirectInput(_ client: IMKTextInput) {
+        apply(NativeCore.shared.commit(session), to: client)
+        directInput = true
+        NativeCore.shared.setDirect(session, true)
+    }
+
+    /// 「かな」キー・Control+Shift+J: 日本語 (自動判定) に戻す。
+    private func switchToJapanese() {
+        directInput = false
+        codeInput = false
+        NativeCore.shared.setCodeInput(session, false)
+        NativeCore.shared.setDirect(session, false)
     }
 
     @objc private func selectAutomatic(_ sender: Any?) { selectMode(direct: false, code: false) }

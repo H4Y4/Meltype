@@ -114,6 +114,36 @@ struct EventTests {
    _=key(controller,client,"",code:UInt16(kVK_JIS_Eisu));type(controller,client,"ka");equal(client.document,"ka")
    _=key(controller,client,"",code:UInt16(kVK_JIS_Kana));type(controller,client,"ka");_=key(controller,client,"",code:UInt16(kVK_F6));_=key(controller,client,"\r",code:UInt16(kVK_Return));equal(client.document,"ka か")
   }
+  // US / JIS 配列で英数・かなキーが無くても、Ctrl+Shift+J (日本語) / Ctrl+Shift+; ・ ' (英数) で切り替える。
+  let ctrlShift:NSEvent.ModifierFlags=[.control,.shift]
+  check("Ctrl+Shift+; switches to direct input") { controller,client in
+   precondition(key(controller,client,";",code:UInt16(kVK_ANSI_Semicolon),flags:ctrlShift))
+   type(controller,client,"ka");equal(client.document,"ka");equal(client.marked,"")
+  }
+  check("Ctrl+Shift+' switches to direct input") { controller,client in
+   precondition(key(controller,client,"'",code:UInt16(kVK_ANSI_Quote),flags:ctrlShift))
+   type(controller,client,"ka");equal(client.document,"ka");equal(client.marked,"")
+  }
+  check("Ctrl+Shift+J returns to Japanese") { controller,client in
+   _=key(controller,client,"",code:UInt16(kVK_JIS_Eisu));type(controller,client,"ka");equal(client.document,"ka")
+   precondition(key(controller,client,"j",code:UInt16(kVK_ANSI_J),flags:ctrlShift))
+   type(controller,client,"ka");equal(client.marked,"か")
+  }
+  check("Ctrl+Shift+; commits composition first") { controller,client in
+   type(controller,client,"@kuraido");precondition(client.marked != "")
+   precondition(key(controller,client,";",code:UInt16(kVK_ANSI_Semicolon),flags:ctrlShift))
+   equal(client.document,"@kuraido");equal(client.marked,"")
+   type(controller,client,"ka");equal(client.document,"@kuraidoka")
+  }
+  check("Ctrl+J and Cmd+Shift+J are not mode keys") { controller,client in
+   _=key(controller,client,"",code:UInt16(kVK_JIS_Eisu));type(controller,client,"ka")
+   // Shift なしの Ctrl+J・Command / Option 付きは対象外 (キーを使わず、直接入力のまま)。
+   precondition(!key(controller,client,"j",code:UInt16(kVK_ANSI_J),flags:.control))
+   precondition(!key(controller,client,"j",code:UInt16(kVK_ANSI_J),flags:[.command,.shift]))
+   precondition(!key(controller,client,"j",code:UInt16(kVK_ANSI_J),flags:[.control,.shift,.command]))
+   precondition(!key(controller,client,"j",code:UInt16(kVK_ANSI_J),flags:[.control,.shift,.option]))
+   type(controller,client,"ka");equal(client.document,"kaka");equal(client.marked,"")
+  }
   check("Command shortcut commits once") { controller,client in
    type(controller,client,"@kuraido");precondition(!key(controller,client,"a",flags:.command));equal(client.document,"@kuraido");equal(client.marked,"")
   }
