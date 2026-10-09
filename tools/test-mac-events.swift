@@ -172,9 +172,14 @@ struct EventTests {
    precondition(!functionKey(controller,client,0xF728,code:kVK_ForwardDelete),"delete must pass through to the app")
    equal(client.document,"hello");equal(client.marked,"")
   }
-  check("F8 commits kana and passes through") { controller,client in
+  check("F8 converts to half-width katakana (function key scalar is not a character)") { controller,client in
    type(controller,client,"aiueo")
-   precondition(!functionKey(controller,client,0xF70B,code:kVK_F8),"unimplemented F8 must pass through to the app")
+   precondition(functionKey(controller,client,0xF70B,code:kVK_F8),"F8 must be consumed by the core")
+   equal(client.document,"");equal(client.marked,"ｱｲｳｴｵ")
+  }
+  check("Unassigned F5 commits kana and passes through") { controller,client in
+   type(controller,client,"aiueo")
+   precondition(!functionKey(controller,client,0xF708,code:kVK_F5),"unassigned F5 must pass through to the app")
    equal(client.document,"あいうえお");equal(client.marked,"")
   }
   check("Option+Shift+K Apple logo stays a character") { controller,client in
@@ -257,6 +262,12 @@ struct EventTests {
    precondition(!ctrl(controller,client,"\n","j",code:kVK_ANSI_J),"Ctrl+J must pass to the app")
    equal(client.document,"あいうえお"); equal(client.marked,"")
   }
+  check("ATOK style Ctrl+Shift+; during composition commits and switches to direct input") { controller,client in
+   type(controller,client,"aiueo")
+   precondition(ctrl(controller,client,";",":",code:kVK_ANSI_Semicolon,shift:true),"must not pass the key to the app")
+   equal(client.document,"あいうえお"); equal(client.marked,"")
+   type(controller,client,"ka"); equal(client.document,"あいうえおka"); equal(client.marked,"")
+  }
   writeControlKeys("Mac")
   check("Mac style Ctrl+J / Ctrl+K / Ctrl+L") { controller,client in
    type(controller,client,"aiueo")
@@ -278,6 +289,14 @@ struct EventTests {
    _=ctrl(controller,client,"\n","j",code:kVK_ANSI_J); equal(client.marked,"あいうえお")
    precondition(ctrl(controller,client,"'","'",code:kVK_ANSI_Quote),"Ctrl+' must be consumed"); equal(client.marked,"aiueo")
    equal(client.document,"")
+  }
+  check("Mac style Ctrl+Shift+; converts to half-width alphanumerics and stays in Japanese mode") { controller,client in
+   type(controller,client,"aiueo")
+   precondition(ctrl(controller,client,";",":",code:kVK_ANSI_Semicolon,shift:true),"Ctrl+: must be consumed by the core")
+   equal(client.marked,"aiueo"); equal(client.document,"")
+   // 英数 (直接入力) に切り替わっていれば、続けて打った英字はそのまま確定済みの文字になる。変換中の文字に入るなら切り替わっていない。
+   type(controller,client,"ka")
+   precondition(client.document=="" && client.marked.hasPrefix("aiueo") && client.marked.count>5,"typing must continue the composition: doc=\(client.document.debugDescription) marked=\(client.marked.debugDescription)")
   }
   check("Mac style Ctrl+U is not assigned and Ctrl+N passes when empty") { controller,client in
    precondition(!ctrl(controller,client,"\u{0E}","n",code:kVK_ANSI_N),"Ctrl+N with no input must pass to the app")
