@@ -2407,6 +2407,25 @@ internal static class CompositionTests
     }
 
     [Test]
+    public static void F8_ShowsFullWidthSymbolsAsHalfWidth()
+    {
+        // Microsoft IME と同じく、F8 (半角カナ表示) では全角の記号も半角にする
+        var k = new Keyboard();
+        k.Type("wa-i!");
+        k.Press(VirtualKeys.F8);
+        Assert.Equal("ﾜｰｲ!", k.Showing);
+
+        var plain = new Keyboard();
+        plain.Type("aiueo");
+        plain.Press(VirtualKeys.F8);
+        Assert.Equal("ｱｲｳｴｵ", plain.Showing);
+
+        Assert.Equal("ｱ,.!~ A1 ¥", CompositionText.ToHalfWidthDisplay("ア，．！～　Ａ１　￥"));
+        // 候補に出す半角カナ (ToHalfWidthKatakana) は、これまでどおり記号を変えない
+        Assert.Equal("ｱ！", CompositionText.ToHalfWidthKatakana("ア！"));
+    }
+
+    [Test]
     public static void F8_DuringConversion_ShowsWholeTextAsHalfWidthKatakana()
     {
         // 変換中 (Space の後) に F8 を押したら、変換をやめて全体を半角カタカナにする (F7 と同じ)

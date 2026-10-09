@@ -116,8 +116,8 @@ struct EventTests {
    type(controller,client,"e");_=key(controller,client,"",code:UInt16(kVK_F6));_=key(controller,client,"\u{0301}\u{0300}");equal(client.document,"え\u{0301}\u{0300}")
   }
   check("F8 half-width katakana") { controller,client in
-   // 実機では F8 の characters に U+F70B が入るが、main にはそれが変換中の文字に混ざる既知の不具合があり
-   // (fix/mac-function-key-chars で修正中)、このテストでは characters を空にして送る。
+   // 機能キーの characters には私用領域の文字 (F8 なら U+F70B) が入るので、それを避けるため
+   // このテストでは characters を空にして送る。
    type(controller,client,"aiueo");precondition(key(controller,client,"",code:UInt16(kVK_F8)),"F8 must be consumed")
    equal(client.marked,"ｱｲｳｴｵ")
   }
