@@ -57,6 +57,14 @@ struct EventTests {
    }
    return consumed
   }
+  // 機能キーの NSEvent。実機では characters に NSUpArrowFunctionKey (U+F700) 〜 NSModeSwitchFunctionKey (U+F747) の
+  // 私用領域の文字が入り、アプリはそれを文字として挿入しない。
+  func functionKey(_ controller:MeltypeInputController,_ client:EventClient,_ scalar:UInt32,code:Int)->Bool {
+   let chars=String(UnicodeScalar(scalar)!)
+   let event=NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:[.function],timestamp:0,windowNumber:0,context:nil,characters:chars,charactersIgnoringModifiers:chars,isARepeat:false,keyCode:UInt16(code))!
+   return controller.handle(event,client:client)
+  }
+  func hasFunctionKeyScalar(_ text:String)->Bool { text.unicodeScalars.contains { (0xF700...0xF747).contains($0.value) } }
   func type(_ controller:MeltypeInputController,_ client:EventClient,_ raw:String) {
    for scalar in raw.unicodeScalars { _=key(controller,client,String(scalar),code:UInt16(kVK_ANSI_A)) }
   }
@@ -109,6 +117,41 @@ struct EventTests {
   }
   check("F9 override") { controller,client in
    type(controller,client,"@kuraido");_=key(controller,client,"",code:UInt16(kVK_F9));_=key(controller,client,"\r",code:UInt16(kVK_Return));equal(client.document,"＠ｋｕｒａｉｄｏ")
+  }
+  for (name,scalar,code) in [("Left",UInt32(0xF702),kVK_LeftArrow),("Right",UInt32(0xF703),kVK_RightArrow),("Up",UInt32(0xF700),kVK_UpArrow),("Down",UInt32(0xF701),kVK_DownArrow),("ForwardDelete",UInt32(0xF728),kVK_ForwardDelete),("Home",UInt32(0xF729),kVK_Home),("End",UInt32(0xF72B),kVK_End),("PageUp",UInt32(0xF72C),kVK_PageUp),("PageDown",UInt32(0xF72D),kVK_PageDown),("F6",UInt32(0xF709),kVK_F6),("F8",UInt32(0xF70B),kVK_F8),("F13",UInt32(0xF710),kVK_F13)] {
+   check("function key \(name) with private-use characters") { controller,client in
+    type(controller,client,"aiueo")
+    _=functionKey(controller,client,scalar,code:code)
+    precondition(!hasFunctionKeyScalar(client.marked),"marked text has function key scalar: \(client.marked.debugDescription)")
+    precondition(!hasFunctionKeyScalar(client.document),"document has function key scalar: \(client.document.debugDescription)")
+    _=key(controller,client,"\r",code:UInt16(kVK_Return))
+    precondition(!hasFunctionKeyScalar(client.document),"committed text has function key scalar: \(client.document.debugDescription)")
+    equal(client.marked,"")
+   }
+  }
+  check("Left arrow commits Latin text and passes through") { controller,client in
+   type(controller,client,"hello")
+   precondition(!functionKey(controller,client,0xF702,code:kVK_LeftArrow),"arrow must pass through to the app")
+   equal(client.document,"hello");equal(client.marked,"")
+  }
+  check("Forward delete commits Latin text and passes through") { controller,client in
+   type(controller,client,"hello")
+   precondition(!functionKey(controller,client,0xF728,code:kVK_ForwardDelete),"delete must pass through to the app")
+   equal(client.document,"hello");equal(client.marked,"")
+  }
+  check("F8 commits kana and passes through") { controller,client in
+   type(controller,client,"aiueo")
+   precondition(!functionKey(controller,client,0xF70B,code:kVK_F8),"unimplemented F8 must pass through to the app")
+   equal(client.document,"あいうえお");equal(client.marked,"")
+  }
+  check("Option+Shift+K Apple logo stays a character") { controller,client in
+   type(controller,client,"aiueo")
+   let event=NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:[.option,.shift],timestamp:0,windowNumber:0,context:nil,characters:"\u{F8FF}",charactersIgnoringModifiers:"K",isARepeat:false,keyCode:UInt16(kVK_ANSI_K))!
+   let consumed=controller.handle(event,client:client)
+   if !consumed { client.insertText("\u{F8FF}",replacementRange:NSRange(location:NSNotFound,length:0)) }
+   _=key(controller,client,"\r",code:UInt16(kVK_Return))
+   precondition(client.document.unicodeScalars.contains { $0.value==0xF8FF },"U+F8FF must stay a character: \(client.document.debugDescription)")
+   equal(client.marked,"")
   }
   check("JIS direct and kana modes") { controller,client in
    _=key(controller,client,"",code:UInt16(kVK_JIS_Eisu));type(controller,client,"ka");equal(client.document,"ka")
