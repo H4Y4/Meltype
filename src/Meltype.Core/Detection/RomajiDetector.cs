@@ -292,6 +292,10 @@ public sealed class RomajiDetector
         return new RomajiAnalysis(true, tokens.ToArray(), "", null, strongYouon, tsu, sokuon, longVowels);
     }
 
+    /// <summary>ユーザーの表に、この綴りそのもの、またはこの綴りで始まるもっと長い綴り (zh、zha) があるか。</summary>
+    public bool HasCustomSpelling(string spelling) =>
+        _custom is not null && (_custom.ContainsKey(spelling) || _customPartials.Contains(spelling));
+
     /// <summary>s の i から始まる、ユーザーの表のいちばん長い綴り。無ければ null。</summary>
     private RomajiToken? MatchCustom(string s, int i)
     {

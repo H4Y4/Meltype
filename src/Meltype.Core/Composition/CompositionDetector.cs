@@ -93,14 +93,31 @@ public sealed partial class CompositionDetector
         // 連結した原文と各位置のオフセットを使い回す (内容・順序は同じで、文字列を毎回連結しない)。
         Prepare(units);
         var token = Raw(units, 0, units.Count) + pending;
+        // 矢印 (zl) を含む入力は、全体をひとつの英単語・英字の並びとしては見ない (区間ごとに見る)。
+        var hasArrow = _preparedArrows[units.Count] > 0;
         // Structured Latin tokens are opaque; their components are not Japanese readings.
         if (!kanaInput && token.All(c => c is >= '!' and <= '~') &&
             (token.Contains('@') && token.Any(char.IsAsciiLetter) || token.Contains('_') || token.Contains("://", StringComparison.Ordinal) ||
              System.Text.RegularExpressions.Regex.Matches(token, "[a-z][A-Z][a-z]").Count >= 2))
             return [new CompositionSegment(true, "", token)];
+        // 矢印は仮: 矢印を含む英字の並びが、打ったままなら英語 (zlib・zhang・bamboozle) になるなら、矢印にせずその並びを英字にする。
+        var arrowRun = hasArrow && !kanaInput && level != DetectionLevel.Manual ? ArrowEnglishRun(units, pending, final, level) : null;
+        // 判定の途中で区間分けを呼ぶので、このあとの区間分けのために入力の準備をやり直す
+        if (hasArrow) Prepare(units);
+        if (arrowRun is var (runStart, runEnd, withPending))
+        {
+            var result = new List<CompositionSegment>();
+            var run = new CompositionSegment(true, "", Raw(units, runStart, runEnd) + (withPending ? pending : ""));
+            var before = runStart > 0 ? units.Take(runStart).ToList() : null;
+            var after = withPending ? null : units.Skip(runEnd).ToList();
+            if (before is not null) result.AddRange(Segment(before, "", precedingEnglish, true, level, false, kanaInput, true));
+            result.Add(run);
+            if (after is not null) result.AddRange(Segment(after, pending, true, followingEnglish, level, false, kanaInput, final));
+            return result;
+        }
         // A romaji token can cross an English boundary (reflect + sa becomes tsa).
         // Recognize an unambiguous English verb before parsing its Japanese conjugation.
-        if (!kanaInput && level != DetectionLevel.Manual)
+        if (!kanaInput && !hasArrow && level != DetectionLevel.Manual)
         {
             var raw = Raw(units, 0, units.Count) + pending;
             // Require two recognized words around a particle: never split arbitrary names
@@ -141,12 +158,75 @@ public sealed partial class CompositionDetector
         // 途中の区間 (… flow) だけを英語にすると「sたcこvえrflow」のようになってしまう。
         // ただし先頭が辞書の英単語として区切れている (github に push) ならその区切りを使う。
         var whole = Raw(units, 0, units.Count) + pending;
+        if (hasArrow) return segments;
         if (UnknownWordThenJapanese(units, pending, segments, level, whole) is { } split) return split;
         if (level != DetectionLevel.Manual && !segments[0].IsEnglish && Memory?.Get(whole.ToLowerInvariant()) != false && IsUnknownEnglishWord(whole))
         {
             return [new CompositionSegment(true, "", whole)];
         }
         return segments;
+    }
+
+    /// <summary>
+    /// 矢印 (zl) を含む英字の並び (間の - も含む) のうち、矢印にせず打ったままの英字として見ると英語になる最初の並び [start, end) を返す。無ければ null。
+    /// 英語になるのは、同梱の辞書・固有名詞・ユーザーが英語として覚えた語 (zlib)、それらの打ちかけ (bamboozl)、
+    /// 辞書にない英字の語 (zhang・brezhnev・zkSync・zh-CN)。
+    /// </summary>
+    private (int Start, int End, bool WithPending)? ArrowEnglishRun(IReadOnlyList<CompositionUnit> units, string pending, bool final, DetectionLevel level)
+    {
+        var n = units.Count;
+        var i = 0;
+        while (i < n)
+        {
+            static bool IsWordPart(CompositionUnit u) => u.Raw.Length > 0 && (u.Raw.All(char.IsAsciiLetter) || u.Raw == "-");
+            if (!IsWordPart(units[i]) || units[i].Raw == "-")
+            {
+                i++;
+                continue;
+            }
+            var end = i;
+            while (end < n && IsWordPart(units[end])) end++;
+            // 末尾の - は語の一部にしない。打ちかけの英字が続くなら (pending) 末尾まで
+            var reachesEnd = end == n;
+            while (end > i && units[end - 1].Raw == "-") { end--; reachesEnd = false; }
+            var withPending = reachesEnd && pending.All(char.IsAsciiLetter);
+            var tail = withPending ? pending : "";
+            var lastArrow = -1;
+            for (var k = i; k < end; k++) if (units[k].IsArrow) lastArrow = k;
+            if (lastArrow >= 0 && IsEnglishWithArrow(units, i, end, lastArrow, tail, growing: !final && reachesEnd, level)) return (i, end, withPending);
+            i = Math.Max(end, i + 1);
+        }
+        return null;
+    }
+
+    private bool IsEnglishWithArrow(IReadOnlyList<CompositionUnit> units, int start, int end, int lastArrow, string pending, bool growing, DetectionLevel level)
+    {
+        var typed = (Raw(units, start, end) + pending).Replace("-", "");
+        var lower = typed.ToLowerInvariant();
+        if (lower.Length < 4) return false;
+        var memory = Memory?.Get(lower);
+        if (memory == false) return false;
+        if (memory == true || _english.Words.ContainsWord(lower) || _proper.Contains(lower)) return true;
+        if (growing && !_japanese.IsPrefix(lower) && (_english.IsPrefix(lower) || _proper.HasPrefix(lower))) return true;
+        // 矢印の前が英字 1 文字 (AzlB) や、矢印で終わる (kinzl) ときは、矢印を打ったとみなす。
+        // 矢印の後ろが英単語 (zlhello・hellozlhello) のとき、矢印から始まって後ろが日本語として読める (zlkyou) ときも、矢印を打ったとみなす。
+        var before = Raw(units, start, FirstArrow(units, start, end)).Replace("-", "");
+        if (before.Length == 1) return false;
+        var after = (Raw(units, lastArrow + 1, end) + pending).Replace("-", "");
+        if (after.Length == 0) return false;
+        if (IsKnownEnglishWord(after) || before.Length == 0 && _romaji.Analyze(after.ToLowerInvariant()) is { IsValid: true, Partial: "" or "n" }) return false;
+        // 矢印にせず打ち直して区間分けをして、打ったままの英字になる (英語の区間があり、あとはローマ字として読めなかった英字だけ) か
+        // (zlib・zhang・bamboozle・brezhnev・zh-CN)
+        var plain = new CompositionText(this) { NoZArrows = true };
+        foreach (var c in typed) plain.Append(c);
+        var segments = plain.Segments(final: !growing);
+        return segments.Any(x => x.IsEnglish) && string.Concat(segments.Select(x => x.IsEnglish ? x.Raw : x.Kana)) == typed;
+    }
+
+    private static int FirstArrow(IReadOnlyList<CompositionUnit> units, int start, int end)
+    {
+        for (var k = start; k < end; k++) if (units[k].IsArrow) return k;
+        return end;
     }
 
     private List<CompositionSegment>? UnknownWordThenJapanese(IReadOnlyList<CompositionUnit> units, string pending, List<CompositionSegment> segments, DetectionLevel level, string whole)
@@ -886,6 +966,8 @@ public sealed partial class CompositionDetector
     // 追加のスペルチェッカーは独自の訂正を持つため、従来の判定へ渡す。
     private bool CanBeEnglishSpan(int start, int end, string pending, bool growing, string? next)
     {
+        // z + h/j/k/l の矢印は英語の区間に入れない (zl のまま確定されないように)
+        if (_preparedArrows[end] != _preparedArrows[start]) return false;
         if (pending.Length > 0) return true;
         var from = _preparedRawOffsets[start];
         var length = _preparedRawOffsets[end] - from;
@@ -904,6 +986,7 @@ public sealed partial class CompositionDetector
     private int[] _preparedUpper = [];
     private int[] _preparedNonLetters = [];
     private int[] _preparedApostrophes = [];
+    private int[] _preparedArrows = [];
     private int[] _preparedUnreadable = [];
     private bool[] _preparedSymbolSuffix = [];
     private string _preparedRaw = "";
@@ -917,12 +1000,15 @@ public sealed partial class CompositionDetector
         var upper = new int[units.Count + 1];
         var nonLetters = new int[units.Count + 1];
         var apostrophes = new int[units.Count + 1];
+        var arrows = new int[units.Count + 1];
         for (var i = 0; i < units.Count; i++)
         {
             upper[i + 1] = upper[i] + units[i].Raw.Count(char.IsAsciiLetterUpper);
             nonLetters[i + 1] = nonLetters[i] + units[i].Raw.Count(c => !char.IsAsciiLetter(c));
             apostrophes[i + 1] = apostrophes[i] + units[i].Raw.Count(c => c == '\'');
+            arrows[i + 1] = arrows[i] + (units[i].IsArrow ? 1 : 0);
         }
+        _preparedArrows = arrows;
         _preparedUpper = upper;
         _preparedNonLetters = nonLetters;
         _preparedApostrophes = apostrophes;
