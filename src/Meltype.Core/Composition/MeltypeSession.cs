@@ -364,10 +364,17 @@ public sealed class MeltypeSession
             return _host.Result(consumed: false);
         _host.PrepareReconversion(new ReconversionSelection(text, reading));
         var down = new KeyEvent(VirtualKeys.Convert, 0, false, false, false, Environment.TickCount64);
-        // 変換キーの経路 (Windows 版の再変換と同じ) で始める。選択は Host が覚えているものを使う。
-        Feed(down, e => e.Vk == VirtualKeys.Convert);
-        Feed(down with { IsUp = true });
-        _host.DropPendingReconversion();
+        try
+        {
+            // 変換キーの経路 (Windows 版の再変換と同じ) で始める。選択は Host が覚えているものを使う。
+            Feed(down, e => e.Vk == VirtualKeys.Convert);
+            Feed(down with { IsUp = true });
+        }
+        finally
+        {
+            // 変換中に例外が出ても、用意した選択を残さない (残ると、あとの「変換」キーで古い選択の再変換が始まる)
+            _host.DropPendingReconversion();
+        }
         return _host.Result(consumed: _controller.IsComposing);
     }
 
