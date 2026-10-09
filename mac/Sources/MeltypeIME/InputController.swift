@@ -343,14 +343,24 @@ final class MeltypeInputController: IMKInputController {
             selectingFromCore = true
             defer { selectingFromCore = false }
             // 一覧を作り直すと選択が先頭に戻るので、中身が変わったとき (別の文節に移ったときなど) だけ作り直す。
+            var rebuilt = false
             if candidateList != view.candidates || !window.isVisible() {
                 candidateList = view.candidates
                 window.update()
                 window.show(kIMKLocateCandidatesBelowHint)
                 windowIndex = 0
+                rebuilt = true
             }
             if view.selectedIndex >= 0 && view.selectedIndex < view.candidates.count {
-                selectInWindow(window, index: view.selectedIndex)
+                wantedIndex = view.selectedIndex
+                if rebuilt && wantedIndex != 0 && !syncScheduled {
+                    // 作り直した直後は、候補ウィンドウがまだ行を読み込んでいないことがあり、
+                    // すぐ moveDown を送ると端で止まって位置がずれる。次の周回で動かす。
+                    syncScheduled = true
+                    DispatchQueue.main.async { [weak self] in self?.syncWindowSelection() }
+                } else if !syncScheduled {
+                    selectInWindow(window, index: wantedIndex)
+                }
             }
             scheduleMeaning(view)
         } else {
@@ -362,6 +372,19 @@ final class MeltypeInputController: IMKInputController {
 
     /// 候補ウィンドウで今選ばれている候補の番号 (一覧を作り直すと先頭に戻る)。
     private var windowIndex = 0
+    /// 本体で選んでいる候補の番号。作り直した直後の移動を次の周回に回している間 (syncScheduled) も、最新の番号を覚えておく。
+    private var wantedIndex = 0
+    private var syncScheduled = false
+
+    /// 作り直しの直後から回した、候補ウィンドウの選択合わせ。
+    private func syncWindowSelection() {
+        syncScheduled = false
+        guard let window = candidatesWindow, window.isVisible(),
+              wantedIndex >= 0, wantedIndex < candidateList.count else { return }
+        selectingFromCore = true
+        defer { selectingFromCore = false }
+        selectInWindow(window, index: wantedIndex)
+    }
 
     /// 候補ウィンドウの選択を index 番目の候補に合わせる。
     /// selectCandidate(withIdentifier:) では選択が動かず、selectedCandidate() も今の選択とずれることがある (macOS 26)。

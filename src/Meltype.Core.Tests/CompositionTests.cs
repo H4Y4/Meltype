@@ -206,7 +206,7 @@ internal static class CompositionTests
         public Keyboard(bool live = false, bool direct = false, ConversionHistory? history = null, IKanjiConverter? converter = null,
             Func<string, IReadOnlyList<string>>? moreCandidates = null, UserDictionary? userDictionary = null, LanguageMemory? languages = null,
             TranslationDictionary? translations = null, TranslationHistory? translationHistory = null, bool slashAsMiddleDot = false, Predictor? predictor = null,
-            Func<DateTime>? now = null, bool showTypedKeys = false)
+            Func<DateTime>? now = null, bool showTypedKeys = false, bool shiftArrowPaging = false)
         {
             Direct = direct;
             Controller = new CompositionController(Gate, Detector, converter ?? Converter, Host, new CompositionOptions
@@ -235,6 +235,7 @@ internal static class CompositionTests
                 SlashAsMiddleDot = () => slashAsMiddleDot,
                 Now = now ?? (() => DateTime.Now),
                 ShowTypedKeys = () => showTypedKeys,
+                ShiftArrowPaging = shiftArrowPaging,
             });
             Controller.Committed += Sigil.Append;
             Host.Replayed += e =>
@@ -543,9 +544,9 @@ internal static class CompositionTests
       }
 
     /// <summary>候補が 9 個より多い読み (かわ) の Keyboard。変換エンジンの候補を 30 個足す。</summary>
-    private static Keyboard ManyCandidates()
+    private static Keyboard ManyCandidates(bool shiftArrowPaging = false)
     {
-        var k = new Keyboard(moreCandidates: reading => reading == "かわ" ? Enumerable.Range(1, 30).Select(i => "候補" + i).ToArray() : []);
+        var k = new Keyboard(shiftArrowPaging: shiftArrowPaging, moreCandidates: reading => reading == "かわ" ? Enumerable.Range(1, 30).Select(i => "候補" + i).ToArray() : []);
         k.Type("kawa ");
         Assert.True(k.Host.View!.Candidates.Count > CompositionController.CandidatePageSize * 2, "3 ページ以上ある: " + k.Host.View.Candidates.Count);
         Assert.Equal(0, k.Host.View.SelectedIndex);
@@ -592,10 +593,25 @@ internal static class CompositionTests
     }
 
     [Test]
-    public static void ShiftDownUp_DuringConversion_PagesLikePageDownUp()
+    public static void ShiftDownUp_ByDefault_MovesOneCandidateAtATime()
     {
-        // macOS 標準の IME と同じく Shift+↓ / Shift+↑ でもページ単位。Shift なしの ↓ ↑ は今までどおり 1 つずつ。
+        // 既定 (Windows・Linux) では Shift+↓ / Shift+↑ は今までどおり ↓ ↑ と同じく 1 つずつ。PageDown はページ送り。
         var k = ManyCandidates();
+        PressWithShift(k, VirtualKeys.Down);
+        Assert.Equal(1, k.Host.View!.SelectedIndex);
+        PressWithShift(k, VirtualKeys.Down);
+        Assert.Equal(2, k.Host.View!.SelectedIndex);
+        PressWithShift(k, VirtualKeys.Up);
+        Assert.Equal(1, k.Host.View!.SelectedIndex);
+        k.Press(VirtualKeys.PageDown);
+        Assert.Equal(CompositionController.CandidatePageSize, k.Host.View!.SelectedIndex, "PageDown はページ送り");
+    }
+
+    [Test]
+    public static void ShiftDownUp_WithShiftArrowPaging_PagesLikePageDownUp()
+    {
+        // ShiftArrowPaging (Mac) では macOS 標準の IME と同じく Shift+↓ / Shift+↑ でもページ単位。Shift なしの ↓ ↑ は 1 つずつ。
+        var k = ManyCandidates(shiftArrowPaging: true);
         var size = CompositionController.CandidatePageSize;
         PressWithShift(k, VirtualKeys.Down);
         Assert.Equal(size, k.Host.View!.SelectedIndex);
@@ -632,20 +648,40 @@ internal static class CompositionTests
     }
 
     [Test]
-    public static void PageDown_WhenOnePage_SelectsFirstCandidate()
+    public static void PageDown_WhenOnePage_KeepsSelection()
     {
-        // 1 ページに収まるときは、ページが 1 つだけなので先頭の候補へ (PageUp も同じ)。確定はしない。
-        var k = new Keyboard();
-        k.Type("zozozo ");
-        Assert.Equal(5, k.Host.View!.Candidates.Count);
-        k.Press(VirtualKeys.Down);
-        k.Press(VirtualKeys.Down);
+        // 1 ページに収まるときは、選んでいる候補を動かさない (PageUp も同じ)。キーは使うので確定してアプリへは通さない。
+        foreach (var shiftArrowPaging in new[] { false, true })
+        {
+            var k = new Keyboard(shiftArrowPaging: shiftArrowPaging);
+            k.Type("zozozo ");
+            Assert.Equal(5, k.Host.View!.Candidates.Count);
+            k.Press(VirtualKeys.Down);
+            k.Press(VirtualKeys.Down);
+            k.Press(VirtualKeys.PageDown);
+            Assert.Equal(2, k.Host.View!.SelectedIndex);
+            k.Press(VirtualKeys.PageUp);
+            Assert.Equal(2, k.Host.View!.SelectedIndex);
+            if (shiftArrowPaging)
+            {
+                PressWithShift(k, VirtualKeys.Down);
+                PressWithShift(k, VirtualKeys.Up);
+                Assert.Equal(2, k.Host.View!.SelectedIndex, "Shift+↓↑ も同じ");
+            }
+            Assert.True(k.Host.View.Converting && k.Host.Output.Count == 0, "変換中のまま");
+        }
+    }
+
+    [Test]
+    public static void PageDown_WhenOnePage_DoesNotCountAsChosen()
+    {
+        // 見た目が変わらない PageDown は「選び直した」ことにしない: 学習しない。
+        var history = new ConversionHistory(null);
+        var k = new Keyboard(history: history, moreCandidates: reading => reading == "かわ" ? ["川", "皮"] : []);
+        k.Type("kawa ");
         k.Press(VirtualKeys.PageDown);
-        Assert.Equal(0, k.Host.View!.SelectedIndex);
-        k.Press(VirtualKeys.Down);
-        k.Press(VirtualKeys.PageUp);
-        Assert.Equal(0, k.Host.View!.SelectedIndex);
-        Assert.True(k.Host.View.Converting && k.Host.Output.Count == 0, "変換中のまま");
+        k.Press(VirtualKeys.Return);
+        Assert.Equal(0, history.Count, "選び直していないので覚えない");
     }
 
     [Test]

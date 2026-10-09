@@ -134,7 +134,7 @@ public sealed class MeltypeSession
     /// 既定の辞書・学習データ (保存場所は <see cref="AppPaths"/>) で作る。converter は OS 側の変換エンジン、
     /// moreCandidates は読みに対する候補の一覧 (無ければ null)、wordChecker は OS のスペルチェッカー (無ければ null)。
     /// </summary>
-    public static MeltypeSession CreateDefault(IKanjiConverter converter, Func<string, IReadOnlyList<string>>? moreCandidates, IWordChecker? wordChecker, bool autoSpacing = false)
+    public static MeltypeSession CreateDefault(IKanjiConverter converter, Func<string, IReadOnlyList<string>>? moreCandidates, IWordChecker? wordChecker, bool autoSpacing = false, bool shiftArrowPaging = false)
     {
         AppPaths.MigrateFromOldName();
         Directory.CreateDirectory(AppPaths.DataDirectory);
@@ -171,6 +171,7 @@ public sealed class MeltypeSession
             SlashAsMiddleDot = () => settings.SlashAsMiddleDot,
             SpaceAroundEnglish = () => settings.SpaceAroundEnglish,
             AutomaticEnglishSpacing = () => autoSpacing,
+            ShiftArrowPaging = shiftArrowPaging,
             Punctuation = () => settings.Punctuation,
             TranslationHistory = new TranslationHistory(AppPaths.TranslationHistoryFile),
         };

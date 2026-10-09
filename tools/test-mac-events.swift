@@ -131,7 +131,7 @@ struct EventTests {
   }
   #if !REAL_CONVERTER
   // PageDown / PageUp / Shift+↓↑ のページ送りで、候補ウィンドウの選択が本体の選択からずれないこと (9 個以上の移動、最後⇔最初の回り込み)。
-  // NSEvent の characters は空にして送る: main には PageUp/PageDown の U+F72C/F72D が文字として混ざる不具合があり、別ブランチ (fix/mac-function-key-chars) で直している。
+  // NSEvent の characters は空にして送る (機能キーの私用領域の文字を避けるため)。
   check("candidate paging keeps window selection in sync") { controller,client in
    // 変換エンジンの関数を登録するのは main.swift なので、ここでも登録する (他の確認に影響しないよう、このテストを最後に置く)。
    NativeCore.shared.initialize()
@@ -144,10 +144,12 @@ struct EventTests {
    _=key(controller,client,"",code:UInt16(kVK_DownArrow)); _=key(controller,client,"",code:UInt16(kVK_UpArrow))
    let list=(controller.candidates(nil) as? [String]) ?? []
    precondition(list.count>18,"need 3+ pages: \(list)")
+   // 一覧を作り直した直後の移動は次の周回に回すので、回してから確かめる。
+   RunLoop.current.run(until:Date(timeIntervalSinceNow:0.05))
    precondition(window.shown && window.position==0,"window starts at head")
    let size=9; let pages=(list.count+size-1)/size
    var page=0
-   for step in ["PageDown","PageDown","PageUp","shiftDown","shiftUp","PageUp"]+Array(repeating:"PageUp",count:1)+Array(repeating:"PageDown",count:pages) {
+   for step in ["PageDown","PageDown","PageUp","shiftDown","shiftUp","PageUp","PageUp"]+Array(repeating:"PageDown",count:pages) {
     switch step {
     case "PageDown": _=key(controller,client,"",code:UInt16(kVK_PageDown)); page=(page+1)%pages
     case "PageUp": _=key(controller,client,"",code:UInt16(kVK_PageUp)); page=(page+pages-1)%pages
