@@ -60,18 +60,46 @@ final class MeltypeInputController: IMKInputController {
         // JIS キーボードの「英数」「かな」キー: 英数 (直接入力) ⇔ 日本語。
         switch Int(event.keyCode) {
         case kVK_JIS_Eisu:
-            apply(NativeCore.shared.commit(session), to: client)
-            directInput = true
-            NativeCore.shared.setDirect(session, true)
+            switchToDirectInput(client)
             return true
         case kVK_JIS_Kana:
-            directInput = false
-            codeInput = false
-            NativeCore.shared.setCodeInput(session, false)
-            NativeCore.shared.setDirect(session, false)
+            switchToJapanese()
             return true
         default:
             break
+        }
+
+        // US 配列など「英数」「かな」キーが無いキーボード向けに、Control+Shift+J (日本語) /
+        // Control+Shift+; ・ ' (英数) でも切り替える。Command・Option が一緒のときは対象外。
+        // macOS 標準では英字への切り替えは JIS 配列が Control+Shift+;、US 配列が Control+Shift+' 。
+        // ここは物理キーで判定するので、どちらの配列でも ; ・ ' の両方で英数になる
+        // (Apple の US 配列で Control+Shift+; は半角カタカナのモードだが、Meltype には無いので英数にしている)。
+        // 文字は Shift で変わる (US の Shift+; は ":") ので、物理キーの位置 (keyCode) で判定する。
+        // JIS 配列の「;」キーは ANSI の ; と、「:」キーは ANSI の ' と同じ位置なので、同じ keyCode で拾える。
+        // Dvorak など配列が違うときも、刻印ではなく QWERTY 上の同じ位置のキーで反応する。
+        if event.modifierFlags.contains([.control, .shift]), event.modifierFlags.intersection([.command, .option]).isEmpty {
+            switch Int(event.keyCode) {
+            case kVK_ANSI_J:
+                switchToJapanese()
+                return true
+            case kVK_ANSI_Semicolon, kVK_ANSI_Quote:
+                // 変換中は、まず普通のキーとして本体へ渡す。Ctrl キーの割り当て (Mac 式の Ctrl+: = 半角英字に変換など) が
+                // 本体にあればそちらを先にする。こうすると、割り当てがあるかどうかを Swift 側が設定ファイルまで見て調べなくて済む。
+                // 割り当てが無いときの本体は、未確定の内容を確定して「アプリへ通す」(consumed=false) と返すので、
+                // そのキーはアプリへ通さず、確定はもう済んでいるのでもう一度 commit せずに英数へ切り替える。
+                if hasMarkedText, let vk = KeyMapping.virtualKey(for: event),
+                   let result = sendToCore(event, vk: vk, client: client) {
+                    apply(result, to: client)
+                    if result.consumed { return true }
+                    directInput = true
+                    NativeCore.shared.setDirect(session, true)
+                    return true
+                }
+                switchToDirectInput(client)
+                return true
+            default:
+                break
+            }
         }
 
         guard let vk = KeyMapping.virtualKey(for: event) else { return false }
@@ -79,11 +107,19 @@ final class MeltypeInputController: IMKInputController {
         // (補助面の文字・結合文字・ZWJ 絵文字・異体字セレクター)。1 要素へ切り詰めたり 0 に置き換えたりしない。
         // 1 スカラーならそのコードポイントのまま本体へ渡し、複数スカラーは未確定内容だけ確定して
         // 元のイベントを 1 回アプリへ通す (本体側の pass-through 契約と対にする)。
-        let scalars = Array((event.characters ?? "").unicodeScalars)
-        if scalars.count > 1 {
+        if (event.characters ?? "").unicodeScalars.count > 1 {
             apply(NativeCore.shared.commitBeforeExternalText(session, text: event.characters ?? ""), to: client)
             return false
         }
+        guard let result = sendToCore(event, vk: vk, client: client) else { return false }
+        apply(result, to: client)
+        return result.consumed
+    }
+
+    /// キーを本体へ渡して結果を返す (入力欄への反映は呼び出し側が apply で行う)。
+    /// character は event.characters の 1 スカラー (無ければ 0)。modifiers は Shift=1・Control=2・Option=4・Command=8。
+    private func sendToCore(_ event: NSEvent, vk: Int32, client: IMKTextInput) -> SessionResult? {
+        let scalars = Array((event.characters ?? "").unicodeScalars)
         // 矢印・Delete・Home/End・PageUp/PageDown・F1〜F35 などは、characters に私用領域の文字
         // (NSUpArrowFunctionKey U+F700 〜 NSModeSwitchFunctionKey U+F747) が入る。文字ではないので、
         // 文字なし (0) として vk だけを渡す。本体側 (Exports.cs の IsMacFunctionKeyScalar) と同じ範囲。
@@ -105,11 +141,7 @@ final class MeltypeInputController: IMKInputController {
         if flags.contains(.command) { modifiers |= 8 }
 
         let (before, after) = hasMarkedText ? (nil, nil) : surroundingText(of: client)
-        guard let result = NativeCore.shared.handleKey(session, vk: vk, character: character, modifiers: modifiers, before: before, after: after) else {
-            return false
-        }
-        apply(result, to: client)
-        return result.consumed
+        return NativeCore.shared.handleKey(session, vk: vk, character: character, modifiers: modifiers, before: before, after: after)
     }
 
     /// フォーカスが外れた・クリックで別の場所に移ったときなど。未確定の内容をそのまま確定する。
@@ -186,6 +218,21 @@ final class MeltypeInputController: IMKInputController {
         codeInput = code
         NativeCore.shared.setDirect(session, direct)
         NativeCore.shared.setCodeInput(session, code)
+    }
+
+    /// 「英数」キー・Control+Shift+; ・ ': 未確定を確定して、英数 (直接入力) にする。
+    private func switchToDirectInput(_ client: IMKTextInput) {
+        apply(NativeCore.shared.commit(session), to: client)
+        directInput = true
+        NativeCore.shared.setDirect(session, true)
+    }
+
+    /// 「かな」キー・Control+Shift+J: 日本語 (自動判定) に戻す。
+    private func switchToJapanese() {
+        directInput = false
+        codeInput = false
+        NativeCore.shared.setCodeInput(session, false)
+        NativeCore.shared.setDirect(session, false)
     }
 
     @objc private func selectAutomatic(_ sender: Any?) { selectMode(direct: false, code: false) }
