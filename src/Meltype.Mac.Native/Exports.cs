@@ -98,6 +98,9 @@ public static unsafe class Exports
     [UnmanagedCallersOnly(EntryPoint = "meltype_handle_key")]
     public static byte* HandleKey(IntPtr handle, int vk, int ch, int modifiers, byte* before, byte* after)
     {
+        // macOS の矢印・Delete・F キーなどは NSEvent の characters に U+F700..U+F747 の私用領域の文字を入れてくる。
+        // これは文字ではないので、文字なし (0) として扱う。vk のキーとしての処理は残す。
+        if (IsMacFunctionKeyScalar(ch)) ch = 0;
         return Run(handle, session =>
         {
             // 文字を伴わない・扱えない入力。不正な Unicode (負数・単独サロゲート・上限超過) は
@@ -120,6 +123,14 @@ public static unsafe class Exports
     /// <summary>不正な文字の引数か。0 は「文字を伴わないキー」なので不正ではない。</summary>
     private static bool IsInvalidScalar(int ch) =>
         ch < 0 || ch > 0x10FFFF || (ch >= 0xD800 && ch <= 0xDFFF);
+
+    /// <summary>
+    /// macOS の NSEvent が機能キー (矢印・Delete・Home/End・PageUp/PageDown・F1〜F35 など) の characters に入れる私用領域の文字か。
+    /// NSUpArrowFunctionKey (U+F700) 〜 NSModeSwitchFunctionKey (U+F747)。Swift 側 (InputController.swift) と同じ範囲。
+    /// U+F8FF (Apple ロゴ) などその外の私用領域は、ふつうの文字として扱う。
+    /// Swift 側でも同じ範囲を除いているが、本体だけでも単体テストでき、Swift 以外の呼び出し元から呼ばれても安全なように、こちらでも二重に除く。
+    /// </summary>
+    private static bool IsMacFunctionKeyScalar(int ch) => ch is >= 0xF700 and <= 0xF747;
 
     /// <summary>未確定の内容を確定する (フォーカスが外れたときなど)。</summary>
     [UnmanagedCallersOnly(EntryPoint = "meltype_commit")]
