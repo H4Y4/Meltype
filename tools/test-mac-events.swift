@@ -460,6 +460,22 @@ struct EventTests {
   precondition(FileManager.default.fileExists(atPath:directory+"/azooKey"),"converter ignored isolated data directory")
   passed+=3
   print("PASS: actual azooKey candidates, clause reading coverage, isolated data directory")
+  // The neural conversion model is present only after mac/build.sh has fetched it.
+  let zenz=(Bundle.main.resourceURL ?? Bundle.main.bundleURL).appendingPathComponent("zenz")
+  if FileManager.default.fileExists(atPath:zenz.path) {
+   // Reported: ひとつかえただけ → 人使えただけ (segmentation), 変換精度 → 返還制度 (homophones).
+   let segmented=converter.clauses(for:"ひとつかえただけ",context:nil).map(\.text).joined()
+   precondition(segmented.hasSuffix("変えただけ"),"neural segmentation: \(segmented)")
+   let homophone=converter.clauses(for:"へんかんせいどがひくい",context:nil).map(\.text).joined()
+   precondition(homophone=="変換精度が低い","neural homophones: \(homophone)")
+   let contextual=converter.clauses(for:"のせいどがひくい",context:"このIME").map(\.text).joined()
+   precondition(contextual=="の精度が低い","neural left context: \(contextual)")
+   precondition(converter.candidates(for:"へんかん").contains("返還"),"candidate list lost alternatives")
+   passed+=4
+   print("PASS: neural conversion (segmentation, homophones, left context, candidate list)")
+  } else {
+   print("NOT_RUN: neural conversion (no model in mac/.build/zenz)")
+  }
   #endif
   #if !REAL_CONVERTER
   // PageDown / PageUp / Shift+↓↑ のページ送りで、候補ウィンドウの選択が本体の選択からずれないこと (9 個以上の移動、最後⇔最初の回り込み)。

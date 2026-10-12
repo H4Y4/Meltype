@@ -47,16 +47,18 @@ def main():
             for name in filenames + ['Converter.swift']:
                 shutil.copy2(sources / name, target / name)
             manifest = (repo / 'mac/Package.swift').read_text()
-            dependency = re.search(r'\.package\(url: "([^"]+)", revision: "([^"]+)"\)', manifest)
+            dependency = re.search(r'\.package\(url: "([^"]+)", revision: "([^"]+)", traits: (\[[^\]]*\])\)', manifest)
             if not dependency:
                 raise RuntimeError('Missing pinned converter dependency')
-            (package / 'Package.swift').write_text('''// swift-tools-version:5.10
+            # Same traits and C++ interoperability as mac/Package.swift (the neural converter links llama.cpp).
+            (package / 'Package.swift').write_text('''// swift-tools-version:6.1
 import PackageDescription
 let package = Package(name: "EventTests", platforms: [.macOS(.v13)], dependencies: [
-.package(url: %s, revision: %s)], targets: [.executableTarget(name: "EventTests", dependencies: [
+.package(url: %s, revision: %s, traits: %s)], targets: [.executableTarget(name: "EventTests", dependencies: [
 .product(name: "KanaKanjiConverterModuleWithDefaultDictionary", package: "AzooKeyKanaKanjiConverter")],
-swiftSettings: [.define("REAL_CONVERTER")], linkerSettings: [.linkedFramework("InputMethodKit"), .linkedFramework("Carbon")])], swiftLanguageVersions: [.v5])
-''' % (json.dumps(dependency[1]), json.dumps(dependency[2])))
+swiftSettings: [.define("REAL_CONVERTER"), .interoperabilityMode(.Cxx)],
+linkerSettings: [.linkedFramework("InputMethodKit"), .linkedFramework("Carbon")])], swiftLanguageModes: [.v5])
+''' % (json.dumps(dependency[1]), json.dumps(dependency[2]), dependency[3]))
             subprocess.run(['swift', 'build', '--package-path', str(package), '-c', 'release'], check=True)
             binary_directory = Path(subprocess.check_output([
                 'swift', 'build', '--package-path', str(package), '-c', 'release', '--show-bin-path'], text=True).strip())
@@ -65,6 +67,11 @@ swiftSettings: [.define("REAL_CONVERTER")], linkerSettings: [.linkedFramework("I
                 shutil.copytree(bundle, resources / bundle.name)
             for framework in binary_directory.glob('*.framework'):
                 shutil.copytree(framework, frameworks / framework.name, symlinks=True)
+            # The neural conversion model, when mac/build.sh has already fetched it (otherwise the classic converter is tested).
+            models = sorted((repo / 'mac/.build/zenz').glob('*.gguf'))
+            if models:
+                (resources / 'zenz').mkdir()
+                shutil.copy2(models[-1], resources / 'zenz' / models[-1].name)
             # The engine's framework and older-macOS Swift compatibility dylibs use @rpath.
             dependencies = subprocess.check_output(['otool', '-L', str(executable)], text=True)
             toolchain = Path(subprocess.check_output(['xcrun', '--find', 'swift'], text=True).strip()).parent.parent / 'lib'

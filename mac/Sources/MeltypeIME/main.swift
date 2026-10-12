@@ -159,4 +159,6 @@ guard let bundleIdentifier = Bundle.main.bundleIdentifier,
     exit(1)
 }
 candidatesWindow = IMKCandidates(server: server, panelType: kIMKSingleColumnScrollingCandidatePanel)
+// ニューラル変換のモデルの読み込みは、起動が済んでから (最初の 1 文字で待たせないため)。
+DispatchQueue.main.async { MeltypeConverter.shared.warmUp() }
 NSApplication.shared.run()

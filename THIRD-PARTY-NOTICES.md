@@ -18,6 +18,9 @@ Meltype のソースコード (このリポジトリ) には、他者の著作�
 | .NET ランタイム (NativeAOT) | MIT License | libMeltypeNative.dylib に組み込まれる |
 | [swift-collections](https://github.com/apple/swift-collections)・[swift-algorithms](https://github.com/apple/swift-algorithms)・[swift-numerics](https://github.com/apple/swift-numerics) (Apple) | Apache License 2.0 | AzooKeyKanaKanjiConverter が使う部品として、一緒に Meltype.app に組み込まれる (`mac/Package.resolved` で版を固定) |
 | [Jinja](https://github.com/johnmai-dev/Jinja)・[swift-tokenizers](https://github.com/ensan-hcl/swift-tokenizers) | Apache License 2.0 | AzooKeyKanaKanjiConverter が依存する部品 (`mac/Package.resolved` で版を固定)。組み込まれる場合は、ライセンス表示を同梱する |
+| [zenz-v3.2-small](https://huggingface.co/Miwa-Keita/zenz-v3.2-small-gguf) (azooKey のニューラル変換 Zenzai のモデル) | Apache License 2.0 (Hugging Face のモデルカードの表記) | `mac/build.sh` がビルド時にダウンロードし (リビジョンと SHA-256 を固定)、Meltype.app の `Contents/Resources/zenz` に同梱する。リポジトリには含めない |
+| [llama.cpp](https://github.com/azooKey/llama.cpp) (azooKey が配っているビルド済みの `llama.framework`) | MIT License (Copyright The ggml authors) | AzooKeyKanaKanjiConverter がニューラル変換の推論に使う。Meltype.app の `Contents/Frameworks` に同梱する |
+| [SwiftyMarisa](https://github.com/ensan-hcl/SwiftyMarisa) (marisa-trie の Swift 版) | BSD 2-Clause License (LGPL との二重ライセンスのうち、BSD 2-Clause を選ぶ) | AzooKeyKanaKanjiConverter のニューラル変換を有効にすると依存に入る部品 (`mac/Package.resolved` で版を固定) |
 
 ## 実行時に使う Windows の機能 (同梱しない)
 

@@ -3221,6 +3221,56 @@ internal static class CompositionTests
     }
 
     [Test]
+    public static void ContextAwareConverter_ConvertsOnlyWithContext()
+    {
+        // Mac 版 (azooKey のニューラル変換) は文脈で区切りが崩れにくいので、区切りを見比べるための文脈なしの変換をしない
+        // (打つたびに 2 回変換すると遅い)。
+        var converter = new AwareConverter();
+        var k = new Keyboard(converter: converter);
+        k.Host.PrecedingText = "この本は";
+        k.Type("atsui ");
+        Assert.True(converter.Contexts.Count > 0, "変換エンジンを呼ぶ");
+        Assert.True(converter.Contexts.All(c => c.Context == "この本は"), "文脈付きだけで変換する");
+    }
+
+    [Test]
+    public static void ContextAwareConverter_GetsEnglishAndEarlierSegments()
+    {
+        // 報告: meltypeのへんかんせいど → meltypeの返還制度。前の英単語を文脈に渡せば 変換精度 になる。
+        var converter = new AwareConverter();
+        var k = new Keyboard(converter: converter);
+        k.Type("githubnipushsuru ");
+        Assert.True(converter.Contexts.Any(c => c.Kana.StartsWith('に') && c.Context == "github"),
+            "同じ入力の中で前にある英単語を文脈に渡す: " + string.Join(" / ", converter.Contexts));
+
+        converter = new AwareConverter();
+        k = new Keyboard(converter: converter);
+        k.Host.PrecedingText = "Use the API";
+        k.Type("atsui ");
+        Assert.True(converter.Contexts.All(c => c.Context == "Use the API"), "キャレットの前が英語でも文脈に渡す");
+
+        // 文脈を読まない変換エンジン (Mozc・Microsoft IME) は今までどおり: 前が英語なら文脈なし、同じ入力の中の英単語も渡さない。
+        k = new Keyboard();
+        k.Host.PrecedingText = "Use the API";
+        k.Type("atsui ");
+        Assert.True(k.Converter.LastContext is null, "文脈を読まない変換エンジンには英語の文脈を渡さない");
+    }
+
+    /// <summary>文脈を読むニューラルの変換エンジン (Mac 版の azooKey の代わり)。文節の変換に渡された文脈を記録する。</summary>
+    private sealed class AwareConverter : IKanjiConverter, IContextAwareConverter
+    {
+        private readonly FakeConverter _inner = new();
+        public List<(string Kana, string? Context)> Contexts { get; } = [];
+        public string? Convert(string hiragana) => _inner.Convert(hiragana);
+
+        public IReadOnlyList<ConversionClause>? ConvertClauses(string hiragana, string? context = null)
+        {
+            Contexts.Add((hiragana, context));
+            return _inner.ConvertClauses(hiragana, context);
+        }
+    }
+
+    [Test]
     public static void ParticleStart_GetsContext()
     {
         // 報告: ○○になってしまう → 「になってしまう」が「担ってしまう」になる。

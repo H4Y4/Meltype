@@ -51,6 +51,32 @@ dotnet publish ../src/Meltype.Mac.Native/Meltype.Mac.Native.csproj -c Release -r
 echo "== 2/3 IME (Swift) をビルド (初回は azooKey の変換エンジンと辞書のダウンロードに時間がかかります)"
 swift build -c release
 
+# ニューラル変換 (azooKey の Zenzai) のモデル zenz-v3.2-small (Apache License 2.0、約 74MB)。
+# 初回だけ Hugging Face から取って .build/zenz に置き、SHA-256 を確かめてから同梱する。
+#   MELTYPE_ZENZ_MODEL=<gguf のパス>  手元のファイルを同梱する (SHA-256 は確かめない)
+#   MELTYPE_ZENZ_MODEL=none           同梱しない (辞書と統計だけで変換する。精度は大きく落ちる)
+ZENZ_FILE=zenz-v3.2-small-Q5_K_M.gguf
+ZENZ_URL=https://huggingface.co/Miwa-Keita/zenz-v3.2-small-gguf/resolve/c67e03e07d215c869f591b274c1631170d3e11fe/ggml-model-Q5_K_M.gguf
+ZENZ_SHA256=29c223d4c23327b80fd13ebb5ab2555057a46317997d5da391584ffbef0db673
+ZENZ_MODEL="${MELTYPE_ZENZ_MODEL:-}"
+if [[ -z "$ZENZ_MODEL" ]]; then
+    ZENZ_MODEL=".build/zenz/$ZENZ_FILE"
+    if [[ ! -f "$ZENZ_MODEL" || "$(shasum -a 256 "$ZENZ_MODEL" | awk '{print $1}')" != "$ZENZ_SHA256" ]]; then
+        echo "ニューラル変換のモデルをダウンロードします (約 74MB): $ZENZ_URL"
+        mkdir -p .build/zenz
+        curl -fL --retry 3 -o "$ZENZ_MODEL.part" "$ZENZ_URL"
+        if [[ "$(shasum -a 256 "$ZENZ_MODEL.part" | awk '{print $1}')" != "$ZENZ_SHA256" ]]; then
+            rm -f "$ZENZ_MODEL.part"
+            echo "ニューラル変換のモデルの SHA-256 が合いません。同梱せずにビルドするには MELTYPE_ZENZ_MODEL=none を付けてください。" >&2
+            exit 1
+        fi
+        mv "$ZENZ_MODEL.part" "$ZENZ_MODEL"
+    fi
+elif [[ "$ZENZ_MODEL" != none && ! -f "$ZENZ_MODEL" ]]; then
+    echo "MELTYPE_ZENZ_MODEL のファイルがありません: $ZENZ_MODEL" >&2
+    exit 1
+fi
+
 echo "== 3/3 Meltype.app を組み立て"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 BIN="$(swift build -c release --show-bin-path)"
@@ -97,6 +123,11 @@ cp -R Resources/ja.lproj Resources/en.lproj "$APP/Contents/Resources/"
 for bundle in "$BIN"/*.bundle; do
     [[ -e "$bundle" ]] && cp -R "$bundle" "$APP/Contents/Resources/"
 done
+# ニューラル変換のモデル (Converter.swift が Contents/Resources/zenz の .gguf を探す)
+if [[ "$ZENZ_MODEL" != none ]]; then
+    mkdir -p "$APP/Contents/Resources/zenz"
+    cp "$ZENZ_MODEL" "$APP/Contents/Resources/zenz/"
+fi
 # 署名: 環境変数 MELTYPE_MAC_IDENTITY (Developer ID Application の証明書の名前) があれば配布用に署名する
 # (Hardened Runtime・タイムスタンプ付き。公証 (notarization) は mac.yml で行う)。無ければ自分の Mac で使うための署名。
 if [[ -n "${MELTYPE_MAC_IDENTITY:-}" ]]; then

@@ -12,13 +12,13 @@ Mac の正式な IME の仕組み (Input Method Kit) で動く Meltype です。
 | --- | --- |
 | IME 本体 (`Sources/MeltypeIME`, Swift) | Input Method Kit でキーを受け取り、変換中の文字 (下線付き)・候補の一覧・確定を入力欄に反映する |
 | 判定の本体 (`src/Meltype.Mac.Native` → `libMeltypeNative.dylib`) | Windows 版と共通の C# の部分 (`src/Meltype.Core`: 英語 / 日本語の判定・ローマ字・変換の流れ・学習・辞書) を NativeAOT で Mac 用のライブラリにしたもの |
-| 漢字変換 | [azooKey](https://github.com/azooKey/AzooKeyKanaKanjiConverter) の変換エンジン (MIT License、辞書付き) |
+| 漢字変換 | [azooKey](https://github.com/azooKey/AzooKeyKanaKanjiConverter) の変換エンジン (MIT License、辞書付き) と、そのニューラル変換 Zenzai (モデルは [zenz-v3.2-small](https://huggingface.co/Miwa-Keita/zenz-v3.2-small-gguf)、Apache License 2.0)。[ニューラル変換](#ニューラル変換) |
 | 英単語の判定 | macOS のスペルチェッカー (英語) |
 
 ## 必要なもの
 
 - macOS 13 以降 (Apple シリコン / Intel)
-- Xcode、またはコマンドライン ツール (`xcode-select --install`)
+- Xcode 16.3 以降、またはそのコマンドライン ツール (`xcode-select --install`)。Swift 6.1 以降が必要です
 - .NET 10 SDK (<https://dotnet.microsoft.com/download>。または `curl -sSL https://dot.net/v1/dotnet-install.sh | bash -s -- --channel 10.0`)
 
 ## ビルドとインストール
@@ -28,7 +28,7 @@ cd mac
 ./build.sh
 ```
 
-1. 本体 (C#) を NativeAOT でビルドし、IME (Swift) をビルドして、`build/Meltype.app` を作ります (初回は azooKey の変換エンジンと辞書のダウンロードで時間がかかります)
+1. 本体 (C#) を NativeAOT でビルドし、IME (Swift) をビルドして、`build/Meltype.app` を作ります (初回は azooKey の変換エンジンと辞書、ニューラル変換のモデル (約 74MB) のダウンロードで時間がかかります)
 2. `~/Library/Input Methods/Meltype.app` にインストールします
 3. メニューバーの入力メニューで Meltype を選ぶと使えます。出てこなければ、**システム設定 → キーボード → 入力ソース →「編集…」→「+」→ 日本語 → Meltype** を追加し、それでも出てこなければ、いったんログアウトしてログインし直します
 
@@ -52,6 +52,18 @@ cd mac
   Ctrl+J ひらがな / Ctrl+K カタカナ / Ctrl+L 全角英字 / Ctrl+; ・Ctrl+: ・Ctrl+' 半角英字 (macOS の既定の「ローマ字に変換」と同じ。US 配列の : は Shift+; になるので割り当てなし、Shift の要らない Ctrl+; か Ctrl+' を使います。US 配列の Ctrl+Shift+; (= Ctrl+:) と、英字に切り替える Ctrl+Shift+' (US)・Ctrl+Shift+; (JIS) は本体に割り当てが無いので、上の Control+Shift+; ・' と同じく、確定して英数に切り替わります。半角カタカナは F8) /
   Ctrl+N 次の候補 / Ctrl+P 前の候補 / Ctrl+F 次の文節 / Ctrl+B 前の文節 / Ctrl+W・Ctrl+O 文節を伸ばす / Ctrl+I 縮める / Ctrl+V 次のページ・Ctrl+R 前のページ (ページ送りは変換中だけ)。
   英語と判定した語や F9 / F10 で英字にした後の Ctrl+N などは、確定してからアプリにそのまま渡します。入力が空のときの Ctrl+N などもアプリにそのまま渡します
+
+## ニューラル変換
+
+漢字変換には、azooKey のニューラル変換 Zenzai を使います。文全体と、キャレットの前の文字 (同じ入力の中で前にある英単語も含む) を見て、区切りと漢字を選びます。
+
+- 辞書と統計だけの変換では `せいかくなへんかん` → 正確な返還、`ひとつかえただけ` → 人使えただけ になっていたものが、正確な変換・ひとつ変えただけ になります
+- 公開の評価データ [AJIMEE-Bench](https://github.com/ensan-hcl/AJIMEE-Bench) (200 件) の 1 位の正解率は、使わないとき 44.0%、使うとき 85.5% です (M6 の Mac、推論の上限 5 回)
+- 推論は CPU だけで行います。変換 1 回は平均 31 ミリ秒ほど (使わないときは 12 ミリ秒ほど)、メモリは 80MB ほど増えます
+- 打った文字はどこにも送りません。モデルは Meltype.app の中 (`Contents/Resources/zenz`) にあります
+- 候補の一覧 (Space を押したあと) は、今までどおり辞書と統計から作ります
+- 止めるとき: `defaults write io.github.yksr-melt.inputmethod.Meltype DisableNeuralConversion -bool true` のあと `pkill -x Meltype`。戻すときは `-bool false`
+- モデルを同梱せずにビルドするとき: `MELTYPE_ZENZ_MODEL=none ./build.sh` (手元の .gguf を使うときは、そのパスを渡します)
 
 ## ユーザー辞書
 
