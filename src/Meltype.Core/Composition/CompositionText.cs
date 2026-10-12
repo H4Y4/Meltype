@@ -848,6 +848,12 @@ public sealed class CompositionText
         }
     }
 
+    /// <summary>
+    /// <see cref="RenderSegments"/> が convert を呼んでいる間だけ: その区間より前の区間の表示 (meltype + のへんかんせいど なら meltype)。
+    /// 変換エンジンに文脈として渡すために使う。
+    /// </summary>
+    public string RenderedBefore { get; private set; } = "";
+
     /// <summary>英語区間は英字のまま、日本語区間はかな (または漢字)。保護範囲は打った原文のまま。</summary>
     public string RenderSegments(bool final, Func<string, string>? convert)
     {
@@ -871,7 +877,13 @@ public sealed class CompositionText
                 kana += pending;
                 pending = "";
             }
-            builder.Append(convert is not null && kana.Length > 0 ? convert(kana) : kana);
+            if (convert is not null && kana.Length > 0)
+            {
+                RenderedBefore = builder.ToString();
+                builder.Append(convert(kana));
+                RenderedBefore = "";
+            }
+            else builder.Append(kana);
             builder.Append(pending);
         }
         return builder.ToString();

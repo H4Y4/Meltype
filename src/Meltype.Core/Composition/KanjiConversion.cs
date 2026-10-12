@@ -21,6 +21,15 @@ public interface IKanjiConverter
     IReadOnlyList<ConversionClause>? ConvertClauses(string hiragana, string? context = null);
 }
 
+/// <summary>
+/// 文脈を読んで変換するニューラルの変換エンジン (Mac 版の azooKey の Zenzai)。次の 2 点が変わる:
+///   1. 文脈には、キャレットの前の文字に加えて、同じ入力の中で前にある区間 (meltype + のへんかんせいど の meltype) も渡す。
+///      前の文字が英語でも渡す (API + のしよう → の仕様)。
+///   2. 文脈付きの結果をそのまま使い、区切りを見比べるための文脈なしの変換をしない
+///      (文脈で区切りが崩れにくく、打つたびに 2 回変換すると遅い)。
+/// </summary>
+public interface IContextAwareConverter;
+
 /// <summary>確定した変換を覚えられる変換エンジン (Mozc)。次から同じ読みで同じ文字列を先に出す。</summary>
 public interface ILearningConverter
 {

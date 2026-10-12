@@ -10,7 +10,8 @@ enum MacUserDictionary {
     }
 
     static func entries(from data: Data) throws -> [(String, String)] {
-        let plist = try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
+        // C++ との相互運用を有効にすると ReadOptions が整数になり、[] と書けない。どちらでも通る書き方にする。
+        let plist = try PropertyListSerialization.propertyList(from: data, options: PropertyListSerialization.ReadOptions(), format: nil)
         let rows = (plist as? [[String: Any]]) ?? (plist as? [String: Any])?["UserDictionary"] as? [[String: Any]] ?? []
         let entries = rows.compactMap { row -> (String, String)? in
             guard let raw = (row["reading"] ?? row["shortcut"]) as? String,

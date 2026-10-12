@@ -273,6 +273,8 @@ public sealed class CompositionController
     private string? _lastCommitText;
     private string? _precedingText;
     private string? _followingText;
+    /// <summary>今変換している日本語の区間より前にある、同じ入力の中の区間の表示 (meltype + のへんかんせいど なら meltype)。</summary>
+    private string _compositionBefore = "";
     /// <summary>入力欄が教えてくれた、キャレットの直前の確定済みの文字 (読めなければ null)。確定し直してよいかの判断に使う。</summary>
     private string? _caretBefore;
     private long _lastCommitTime = long.MinValue / 2;
@@ -1244,7 +1246,9 @@ public sealed class CompositionController
                 continue;
             }
             if (segment.Kana.Length == 0) continue;
+            _compositionBefore = string.Concat(clauses.Select(c => c.Text));
             var japanese = ConvertJapanese(segment.Kana);
+            _compositionBefore = "";
             // 英単語 + する (push|した、deploy|しよう): 変換エンジンは英語の後ろの「した」だけを見て 下・死体・使用 にしてしまう。かなのまま
             if (s > 0 && segments[s - 1].IsEnglish && japanese.Count > 0 && IsSuruAfterEnglish(japanese[0])) Prefer(japanese[0], japanese[0].Reading);
             // 候補の最後に、打ったままの英字 (あぴ → api) と全角の英字も出す (Space を連打して英字に戻せる)。
@@ -1561,23 +1565,31 @@ public sealed class CompositionController
     /// 文脈付きと文脈なしの両方で変換し、文節の区切りが同じなら文脈付き (漢字の選び方だけが文脈で変わる: この本は + あつい → 厚い)、
     /// 区切りまで変わるなら文脈なしを使う。前に同じ語があると、変換エンジンは文脈に引きずられて区切りを変えてしまうため
     /// (「記号等」含め、 + きごうとう → き|ごうとう → 気強盗)。
+    /// 文脈を読むニューラルの変換エンジン (<see cref="IContextAwareConverter"/>) は、文脈付きだけで変換する。
     /// </summary>
     private IReadOnlyList<ConversionClause>? ConvertWithContext(string kana, string context)
     {
+        if (_converter is IContextAwareConverter) return _converter.ConvertClauses(kana, context);
         var withContext = _converter.ConvertClauses(kana, context);
         var plain = _converter.ConvertClauses(kana);
         if (withContext is null || plain is null) return withContext ?? plain;
         return withContext.Select(c => c.Reading).SequenceEqual(plain.Select(c => c.Reading)) ? withContext : plain;
     }
 
-    /// <summary>変換エンジンに渡す文脈: キャレットの前の確定済みの文字のうち、同じ文の日本語の部分 (最大 10 文字)。</summary>
+    /// <summary>
+    /// 変換エンジンに渡す文脈: キャレットの前の確定済みの文字のうち、同じ文の日本語の部分 (最大 10 文字)。
+    /// 文脈を読むニューラルの変換エンジン (<see cref="IContextAwareConverter"/>) には、前の文字が英語でも渡し、
+    /// 同じ入力の中で前にある区間も続ける (最大 20 文字。英単語は字数を使うので長めにする)。
+    /// </summary>
     private string? ConversionContext()
     {
-        var text = _precedingText;
-        if (string.IsNullOrEmpty(text) || LanguageOf(text) != false) return null;
+        var aware = _converter is IContextAwareConverter;
+        var text = aware ? _precedingText + _compositionBefore : _precedingText;
+        if (string.IsNullOrEmpty(text) || (!aware && LanguageOf(text) != false)) return null;
         var start = text.LastIndexOfAny(SentenceEnds);
         text = text[(start + 1)..].Trim();
-        return text.Length == 0 ? null : text.Length > 10 ? text[^10..] : text;
+        var limit = aware ? 20 : 10;
+        return text.Length == 0 ? null : text.Length > limit ? text[^limit..] : text;
     }
 
     private static readonly char[] SentenceEnds = ['。', '．', '！', '？', '\n', '\r'];
@@ -1910,9 +1922,12 @@ public sealed class CompositionController
     private string LiveConvert(string kana)
     {
         if (kana.Length < LiveConversionMinLength) return kana;
-        var key = string.Join("\u0001", kana, _precedingText, _followingText, _options.History?.Version);
+        var before = _text.RenderedBefore;
+        var key = string.Join("\u0001", kana, _precedingText, _followingText, _options.History?.Version, before);
         if (_liveCache.TryGetValue(key, out var cached)) return cached;
+        _compositionBefore = before;
         var converted = string.Concat(ConvertJapanese(kana).Select(c => c.Text));
+        _compositionBefore = "";
         if (_liveCache.Count > 256) _liveCache.Clear();
         _liveCache[key] = converted;
         return converted;

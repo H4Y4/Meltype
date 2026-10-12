@@ -217,7 +217,7 @@ public static unsafe class Exports
         return text is null ? [] : text.Split('\n', StringSplitOptions.RemoveEmptyEntries);
     }
 
-    private sealed class CallbackConverter : IKanjiConverter
+    private sealed class CallbackConverter : IKanjiConverter, IContextAwareConverter
     {
         public string? Convert(string hiragana) =>
             ConvertClauses(hiragana) is { Count: > 0 } clauses ? string.Concat(clauses.Select(c => c.Text)) : null;
