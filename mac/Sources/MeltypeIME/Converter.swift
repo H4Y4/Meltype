@@ -14,6 +14,11 @@ final class MeltypeConverter {
     // ビルドしたマシンのフォルダーしか見ない。辞書のバンドルは Contents/Resources に入れているので、見つからずに落ちていた (#26)。
     // (Meltype.app の直下には置けない: 署名が通らない)。なので、辞書の場所をこちらで渡す。
     private let converter = KanaKanjiConverter(dicdataStore: DicdataStore(dictionaryURL: MeltypeConverter.resource("Dictionary")))
+    /// 候補の一覧 (辞書と統計だけの変換) 用の、もう 1 つの変換エンジン。ニューラル変換を使うときだけ作る。
+    /// azooKey は、前回と同じ読みが来ると前回の内部状態 (ラティス) を使い回す。ニューラル変換の直後に、同じ変換エンジンで
+    /// 同じ読みを辞書と統計だけで変換すると、その状態が食い違っていて配列の範囲外を読み、IME ごと落ちる
+    /// (にゅうりょく・しゅうせい を変換して Space を押すだけで落ちた)。変換エンジンを分けて、状態が混ざらないようにする。
+    private lazy var listConverter = KanaKanjiConverter(dicdataStore: DicdataStore(dictionaryURL: MeltypeConverter.resource("Dictionary")))
     private let directory: URL
     /// ニューラル変換 (Zenzai) のモデル。同梱していない・設定で止めているときは nil (辞書と統計だけで変換する)。
     private let zenzaiWeight: URL?
@@ -89,7 +94,9 @@ final class MeltypeConverter {
         if let cached = resultCache[key] { return cached }
         var composing = ComposingText()
         composing.insertAtCursorPosition(hiragana, inputStyle: .direct)
-        let results = converter.requestCandidates(composing, options: options(neural: neural, context: context))
+        // ニューラル変換を使う構成では、converter にはニューラル変換だけを、listConverter には辞書と統計だけの変換を流す。
+        let engine = neural || zenzaiWeight == nil ? converter : listConverter
+        let results = engine.requestCandidates(composing, options: options(neural: neural, context: context))
         let count = hiragana.count
         // 入力 (ひらがな) をすべて使った候補だけ (.direct で入れたので、入力の文字数 = ひらがなの文字数)
         let candidates = results.mainResults.filter { $0.composingCount == .inputCount(count) || $0.composingCount == .surfaceCount(count) }

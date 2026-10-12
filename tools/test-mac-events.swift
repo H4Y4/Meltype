@@ -471,8 +471,16 @@ struct EventTests {
    let contextual=converter.clauses(for:"のせいどがひくい",context:"このIME").map(\.text).joined()
    precondition(contextual=="の精度が低い","neural left context: \(contextual)")
    precondition(converter.candidates(for:"へんかん").contains("返還"),"candidate list lost alternatives")
-   passed+=4
-   print("PASS: neural conversion (segmentation, homophones, left context, candidate list)")
+   // Regression: the candidate list for the reading just converted by the neural engine crashed the IME
+   // (azooKey reused the previous lattice: にゅうりょく / しゅうせい + Space). It trapped, so reaching the end is the check.
+   for reading in ["にゅうりょく","しゅうせい","へんかん","きのう"] {
+    _=converter.clauses(for:reading,context:nil)
+    precondition(!converter.candidates(for:reading).isEmpty,"candidate list after neural conversion: \(reading)")
+    _=converter.clauses(for:reading,context:"この")
+    precondition(!converter.candidates(for:reading).isEmpty,"candidate list after contextual conversion: \(reading)")
+   }
+   passed+=5
+   print("PASS: neural conversion (segmentation, homophones, left context, candidate list, candidate list after the same reading)")
   } else {
    print("NOT_RUN: neural conversion (no model in mac/.build/zenz)")
   }
