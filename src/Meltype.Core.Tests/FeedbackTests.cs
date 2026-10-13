@@ -1038,6 +1038,8 @@ internal static class LanguageLearningTests
                 ("ctrlkeitou", "ctrlけいとう"), ("ctrlkara", "ctrlから"), ("ctrlkakunin", "ctrlかくにん"), ("altkeitou", "altけいとう"), ("esckeitou", "escけいとう"),
                 ("sqlkara", "sqlから"), ("sqlkakunin", "sqlかくにん"), ("urlkara", "urlから"), ("urlkeitou", "urlけいとう"), ("htmlkara", "htmlから"), ("xmlkeisiki", "xmlけいしき"),
                 ("mailkara", "mailから"), ("modelkeisiki", "modelけいしき"), ("kyouhasqlkarayaru", "きょうはsqlからやる"),
+                // 短い英語 (git・css・npm) のすぐ後ろの日本語の語が、丸ごと英字になっていた (本家 #537 の procrasticle の対策の行き過ぎ)
+                ("gitkakunin", "gitかくにん"), ("csskeitou", "cssけいとう"), ("npmkanri", "npmかんり"), ("llmkatuyou", "llmかつよう"), ("mackeitou", "macけいとう"), ("procrasticle", "procrasticle"),
                 // Issue #220: 表示では tabで なのに、確定すると打ち間違いとして たべ に直されていた
                 ("tabde", "tabで"), ("tabga", "tabが"), ("kyouhatabdeyaru", "きょうはtabでやる"), ("tabete", "たべて"), ("onegaishimsu", "おねがいします"),
                 // 伸ばす音の う + について (そう|u|ni|t の unit) で、t と s が つ にならず英単語 unit になっていた。英単語 + する (commit|する) は今までどおり

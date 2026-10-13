@@ -372,6 +372,9 @@ public sealed partial class CompositionDetector
         var restLower = segments[1].Raw.ToLowerInvariant();
         if (Detection.DictionaryDetector.StartsWithParticle(restLower) is not null) return false;
         var lowerWhole = whole.ToLowerInvariant();
+        // 残りが最後までローマ字として読めるなら、短い英語 + 日本語の語 (git + kakunin、css + keitou) なので分けたまま
+        // (gitkakunin・npmkanri が丸ごと英字になっていた)。procrasticle の crasticle は読めないので今までどおり 1 語にする。
+        if (_romaji.Analyze(lowerWhole[head.Length..]) is { IsValid: true, Partial: "" or "n" }) return false;
         for (var len = head.Length + 1; len <= lowerWhole.Length; len++)
             if (IsKnownEnglishWord(lowerWhole[..len])) return false;
         return segments.Skip(1).All(s => !s.IsEnglish && s.Raw.All(char.IsAsciiLetter));
