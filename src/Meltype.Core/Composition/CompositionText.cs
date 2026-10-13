@@ -143,7 +143,7 @@ public sealed class CompositionText
             while (_units.Count > 0 && _units[^1] is { Raw.Length: 1 } last && last.Kana == last.Raw && char.IsAsciiLetter(last.Raw[0]) &&
                    !(char.IsAsciiLetterUpper(last.Raw[0]) && _units.Count >= 2 && _units[^2].Raw is { Length: > 0 } before && char.IsAsciiLetterUpper(before[^1])) &&
                    // 英単語の最後の l / x (hotel の l) は、次の文字と合わせて小書き文字 (lya = ゃ) にしない。
-                   !(last.Raw is "l" or "x" or "L" or "X" && EndsWithEnglishWordFromUnit(_units.Count)) &&
+                   !(last.Raw is "l" or "x" or "L" or "X" && (EndsWithEnglishWordFromUnit(_units.Count) || EndsWithListedAbbreviation(""))) &&
                    // 英単語の最後の t (commit の t) も、続けて打った s と合わせて ts (つ) にしない。
                    !(last.Raw is "t" or "T" && _pending.Length > 0 && _pending[0] is 's' or 'S' && EndsWithEnglishWordFromUnit(_units.Count, tsuFollows: true)) &&
                    // 英単語全体の最後の子音 (github の b) は、助詞 ya の拗音 (bya = びゃ) に飲み込まれないようにする (githubya → githubや)。
@@ -158,6 +158,13 @@ public sealed class CompositionText
             if (_pending.Length == 1 && _pending[0] is 'l' or 'x' or 'L' or 'X' && EndsWithEnglishWordFromUnit(_units.Count, _pending.ToString()))
             {
                 _units.Add(new CompositionUnit(_pending.ToString(), _pending.ToString()));
+                _pending.Clear();
+            }
+            // l / x の前が読めない子音の語 (html・sql・url・ctrl) も同じ。読めない子音は l と一緒に入力途中へ戻っているので、
+            // 1 文字ずつの英字に戻す (sql + kara → sqゕら、ctrl + keitou → ctrゖいとう になっていた)。
+            if (_pending.Length >= 2 && _pending[^1] is 'l' or 'x' or 'L' or 'X' && PendingEndsEnglishWord())
+            {
+                foreach (var letter in _pending.ToString()) _units.Add(new CompositionUnit(letter.ToString(), letter.ToString()));
                 _pending.Clear();
             }
             // 英単語の最後の t の次に打った s は、t と合わせて ts (つ・つぃ) にしない
@@ -403,6 +410,20 @@ public sealed class CompositionText
         for (var i = count - 1; i >= 0 && _units[i].Raw.Length > 0 && _units[i].Raw.All(char.IsAsciiLetter); i--)
             letters = _units[i].Raw + letters;
         return letters.Length >= 4 && _detector.IsListedEnglishWord(letters.ToLowerInvariant());
+    }
+
+    /// <summary>
+    /// 入力途中の英字 (読めない子音 + l / x) が、それだけで、または前の単位と合わせて、英単語 (html) か
+    /// 同梱の辞書の略語 (sql・url・ctrl) になるか。
+    /// </summary>
+    private bool PendingEndsEnglishWord()
+    {
+        var pending = _pending.ToString();
+        if (!pending.All(char.IsAsciiLetter)) return false;
+        var lower = pending.ToLowerInvariant();
+        if (lower.Length >= 4 && _detector.IsKnownEnglishWord(lower)) return true;
+        if (_detector.IsListedEnglishWord(lower) && !_detector.Romaji.Analyze(lower).IsValid) return true;
+        return EndsWithEnglishWordFromUnit(_units.Count, pending) || EndsWithListedAbbreviation(pending);
     }
 
     /// <summary>

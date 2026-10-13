@@ -1033,6 +1033,11 @@ internal static class LanguageLearningTests
                 ("moraltute", "もらって"), ("hoteltukau", "hotelつかう"), ("hoteltsukau", "hotelつかう"), ("mailtukau", "mailつかう"), ("realtukau", "realつかう"), ("tooltukau", "toolつかう"), ("sukilltute", "すkillつて"), ("Moraltute", "Moralつて"),
                 // Issue #218: 英単語 (hotel・total) の後ろでわざわざ打った ltu が、l の重なり (te|ll = tell) で英字になっていた
                 ("hotelltu", "hotelっ"), ("hotelltsu", "hotelっ"), ("totalltute", "totalって"), ("hotellya", "hotellや"), ("welltuned", "welltuned"),
+                // 報告: ctrl + keitou (系統) が ctrlk栄東 になる。l の前が読めない子音の語 (ctrl・html・sql・url) の最後の l が、
+                // 後ろの か・け と合わせて小書き文字 (lka = ゕ、lke = ゖ) になっていた。読める語 (mail・model) は今までどおり
+                ("ctrlkeitou", "ctrlけいとう"), ("ctrlkara", "ctrlから"), ("ctrlkakunin", "ctrlかくにん"), ("altkeitou", "altけいとう"), ("esckeitou", "escけいとう"),
+                ("sqlkara", "sqlから"), ("sqlkakunin", "sqlかくにん"), ("urlkara", "urlから"), ("urlkeitou", "urlけいとう"), ("htmlkara", "htmlから"), ("xmlkeisiki", "xmlけいしき"),
+                ("mailkara", "mailから"), ("modelkeisiki", "modelけいしき"), ("kyouhasqlkarayaru", "きょうはsqlからやる"),
                 // Issue #220: 表示では tabで なのに、確定すると打ち間違いとして たべ に直されていた
                 ("tabde", "tabで"), ("tabga", "tabが"), ("kyouhatabdeyaru", "きょうはtabでやる"), ("tabete", "たべて"), ("onegaishimsu", "おねがいします"),
                 // 伸ばす音の う + について (そう|u|ni|t の unit) で、t と s が つ にならず英単語 unit になっていた。英単語 + する (commit|する) は今までどおり
