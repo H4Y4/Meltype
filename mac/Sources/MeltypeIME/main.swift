@@ -37,7 +37,7 @@ if CommandLine.arguments.contains("--self-test") || CommandLine.arguments.contai
             case " ": vk = 0x20
             case "\n": vk = 0x0D
             case "\t": vk = 0x09
-            default: vk = Int32(character.uppercased().utf16.first ?? 0)
+            default: vk = character.lowercased().unicodeScalars.first.flatMap(KeyMapping.virtualKey(forCharacter:)) ?? 0
             }
             let code = Int32(String(character).utf16.first ?? 0)
             last = NativeCore.shared.handleKey(session, vk: vk, character: code,
