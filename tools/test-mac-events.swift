@@ -271,8 +271,8 @@ struct EventTests {
    try! JSONSerialization.data(withJSONObject:object).write(to:configURL)
   }
   func writeLatinKeyboardLayout(_ layout:String?) { writeSetting("LatinKeyboardLayout",layout) }
-  // 括弧 (設定 FullWidthParentheses) と ¥ キー (設定 YenKey)。JIS 配列の ¥ キーは characters が "¥" (U+00A5) で届く。
-  writeSetting("FullWidthParentheses",nil)
+  // 記号の幅 (設定 FullWidthSymbols・HalfWidthSymbols) と ¥ キー (設定 YenKey)。JIS 配列の ¥ キーは characters が "¥" (U+00A5) で届く。
+  writeSetting("FullWidthSymbols",nil)
   check("parentheses stay half-width without a setting") { controller,client in
    type(controller,client,"kore(are)")
    equal(client.marked,"これ(あれ)")
@@ -281,10 +281,19 @@ struct EventTests {
    precondition(!key(controller,client,"¥",code:UInt16(kVK_JIS_Yen)),"the yen key must pass to the app")
    equal(client.document,"¥"); equal(client.marked,"")
   }
-  writeSetting("FullWidthParentheses",true)
-  check("FullWidthParentheses makes parentheses full-width") { controller,client in
-   type(controller,client,"kore(are)")
-   equal(client.marked,"これ（あれ）")
+  writeSetting("FullWidthSymbols","()")
+  check("FullWidthSymbols makes the listed symbols full-width") { controller,client in
+   type(controller,client,"kore(are)>")
+   equal(client.marked,"これ（あれ）＞")
+  }
+  check("FullWidthSymbols keeps the listed symbols full-width after English") { controller,client in
+   type(controller,client,"(test)")
+   equal(client.marked,"（test）")
+  }
+  writeSetting("HalfWidthSymbols","<>`")
+  check("HalfWidthSymbols keeps the listed symbols half-width") { controller,client in
+   type(controller,client,"kore>`are`")
+   equal(client.marked,"これ>`あれ`")
   }
   writeSetting("YenKey","Backslash")
   check("YenKey Backslash turns the yen key into a backslash in the composition") { controller,client in

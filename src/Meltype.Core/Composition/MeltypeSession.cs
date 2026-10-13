@@ -204,6 +204,7 @@ public sealed class MeltypeSession
         detector.SpellChecker = wordChecker is { IsAvailable: true } ? wordChecker : Detection.BuiltInWordChecker.Shared;
         detector.UseScoredSegmentation = () => settings.ScoredSegmentation;
         detector.UseJapanesePunctuationAfterEnglish = () => settings.JapanesePunctuationAfterEnglish;
+        detector.IsFixedFullWidthSymbol = c => SymbolWidth.IsFullWidth(settings.FullWidthSymbols, settings.HalfWidthSymbols, c);
         var options = shared.Options with
         {
             LiveConversion = () => settings.LiveConversion,
@@ -221,7 +222,8 @@ public sealed class MeltypeSession
             CandidateMeanings = () => settings.ShowCandidateMeanings,
             CorrectTypos = () => settings.CorrectTypos,
             SlashAsMiddleDot = () => settings.SlashAsMiddleDot,
-            FullWidthParentheses = () => settings.FullWidthParentheses,
+            FullWidthSymbols = () => settings.FullWidthSymbols,
+            HalfWidthSymbols = () => settings.HalfWidthSymbols,
             YenKey = () => settings.YenKey,
             SpaceAroundEnglish = () => settings.SpaceAroundEnglish,
             AutomaticEnglishSpacing = () => autoSpacing,

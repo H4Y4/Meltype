@@ -187,8 +187,11 @@ public sealed record CompositionOptions
     /// <summary>かなのすぐ後ろの / を中黒 (・) にするか (設定)。</summary>
     public Func<bool> SlashAsMiddleDot { get; init; } = () => false;
 
-    /// <summary>日本語入力で打った ( ) を全角の（ ）にするか (設定)。</summary>
-    public Func<bool> FullWidthParentheses { get; init; } = () => false;
+    /// <summary>いつも全角にする記号 (設定)。</summary>
+    public Func<string> FullWidthSymbols { get; init; } = () => "";
+
+    /// <summary>いつも半角にする記号 (設定)。</summary>
+    public Func<string> HalfWidthSymbols { get; init; } = () => "";
 
     /// <summary>¥ キー・\ キーで入れる文字 (設定)。</summary>
     public Func<Config.YenKeyStyle> YenKey { get; init; } = () => Config.YenKeyStyle.Yen;
@@ -356,7 +359,8 @@ public sealed class CompositionController
         if (_options.RomajiTypos is { } lexicon) detector.IsCommonJapanese ??= lexicon.IsCommonJapanese;
         _text.CorrectTypos = () => _options.CorrectTypos();
         _text.SlashAsMiddleDot = () => _options.SlashAsMiddleDot();
-        _text.FullWidthParentheses = () => _options.FullWidthParentheses();
+        _text.FullWidthSymbols = () => _options.FullWidthSymbols();
+        _text.HalfWidthSymbols = () => _options.HalfWidthSymbols();
         _text.YenKey = () => _options.YenKey();
     }
 
@@ -925,7 +929,7 @@ public sealed class CompositionController
         foreach (var word in text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
         {
             // 前の語が日本語でも「日本語の続き」とはしない (空白で区切って打った語なので、語の途中ではない)
-            var typed = new CompositionText(_detector) { PrecedingEnglish = previousEnglish == true ? true : null, Punctuation = _options.Punctuation(), FullWidthParentheses = _options.FullWidthParentheses, YenKey = _options.YenKey };
+            var typed = new CompositionText(_detector) { PrecedingEnglish = previousEnglish == true ? true : null, Punctuation = _options.Punctuation(), FullWidthSymbols = _options.FullWidthSymbols, HalfWidthSymbols = _options.HalfWidthSymbols, YenKey = _options.YenKey };
             foreach (var c in word) typed.Append(c);
             var segments = typed.Segments(final: true);
             foreach (var segment in segments)
