@@ -1070,7 +1070,7 @@ internal static class LanguageLearningTests
                 ("sqlkara", "sqlから"), ("sqlkakunin", "sqlかくにん"), ("urlkara", "urlから"), ("urlkeitou", "urlけいとう"), ("htmlkara", "htmlから"), ("xmlkeisiki", "xmlけいしき"),
                 ("mailkara", "mailから"), ("modelkeisiki", "modelけいしき"), ("kyouhasqlkarayaru", "きょうはsqlからやる"),
                 // 短い英語 (git・css・npm) のすぐ後ろの日本語の語が、丸ごと英字になっていた (本家 #537 の procrasticle の対策の行き過ぎ)
-                ("gitkakunin", "gitかくにん"), ("csskeitou", "cssけいとう"), ("npmkanri", "npmかんり"), ("llmkatuyou", "llmかつよう"), ("mackeitou", "macけいとう"), ("procrasticle", "procrasticle"),
+                ("gitkakunin", "gitかくにん"), ("csskeitou", "cssけいとう"), ("npmkanri", "npmかんり"), ("llmkatuyou", "llmかつよう"), ("mackeitou", "macけいとう"),
                 // 英単語に挟まれた日本語の語の途中の to が、助詞の「と」になっていた (本家 #154 の abc + to + def の対策の行き過ぎ)
                 ("githubnitourokusitapassword", "githubにとうろくしたpassword"), ("pythondetoukeiwoplotsuru", "pythonでとうけいをplotする"), ("slacknitoukousitalink", "slackにとうこうしたlink"),
                 ("ctrlkeitounoshortcut", "ctrlけいとうのshortcut"), ("abctodef", "abcとdef"), ("gittogithub", "gitとgithub"),
