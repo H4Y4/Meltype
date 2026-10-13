@@ -189,6 +189,9 @@ internal static class CompositionTests
         /// <summary>( ) を全角にするか (設定)。</summary>
         public bool FullWidthParentheses { get; set; }
 
+        /// <summary>¥ キー・\ キーで入れる文字 (設定)。</summary>
+        public Meltype.Config.YenKeyStyle YenKey { get; set; }
+
         /// <summary>かな入力で、仮想キーを順に打つ (shift: その打鍵で Shift を押す)。</summary>
         public void TypeKeys(params (int Vk, bool Shift)[] keys)
         {
@@ -257,6 +260,7 @@ internal static class CompositionTests
                 ControlKeys = () => ControlKeys,
                 SlashAsMiddleDot = () => slashAsMiddleDot,
                 FullWidthParentheses = () => FullWidthParentheses,
+                YenKey = () => YenKey,
                 Now = now ?? (() => DateTime.Now),
                 ShowTypedKeys = () => showTypedKeys,
                 ShiftArrowPaging = shiftArrowPaging,
@@ -2508,6 +2512,28 @@ internal static class CompositionTests
         {
             File.Delete(path);
         }
+    }
+
+    [Test]
+    public static void YenKey_FollowsSetting()
+    {
+        // 設定「¥ キーで入力する文字」。既定は今までどおり \ が全角の ￥、\ (バックスラッシュ) なら半角のまま。
+        string Type(string keys, Meltype.Config.YenKeyStyle style)
+        {
+            var k = new Keyboard { YenKey = style };
+            k.Type(keys);
+            return k.Host.Document;
+        }
+        Assert.Equal("これ￥です", Type("kore\\desu\n", Meltype.Config.YenKeyStyle.Yen), "既定は全角の ￥");
+        Assert.Equal("これ\\です", Type("kore\\desu\n", Meltype.Config.YenKeyStyle.Backslash), "\\ は半角のまま");
+        Assert.Equal("\\", Type("\\\n", Meltype.Config.YenKeyStyle.Backslash), "\\ だけ");
+        // Windows のパスは、どちらの設定でも打ったまま
+        foreach (var style in new[] { Meltype.Config.YenKeyStyle.Yen, Meltype.Config.YenKeyStyle.Backslash })
+        {
+            Assert.Equal("C:\\dir\\a.txt", Type("C:\\dir\\a.txt\n", style), "パスは打ったまま: " + style);
+        }
+        Assert.Equal(Meltype.Config.YenKeyStyle.Yen, new Meltype.Config.Settings().YenKey, "既定は ¥ (今までどおり)");
+        Assert.True(new Meltype.Config.Settings { YenKey = Meltype.Config.YenKeyStyle.Backslash }.ToJson().Contains("\"YenKey\": \"Backslash\""), "名前で保存");
     }
 
     [Test]

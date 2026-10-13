@@ -94,6 +94,15 @@ public enum PunctuationStyle
     [Description("、．")] ToutenFullWidthPeriod,
 }
 
+/// <summary>¥ キー・\ キーで入れる文字 (Mac の日本語入力の「"¥" キーで入力する文字」と同じ)。</summary>
+public enum YenKeyStyle
+{
+    /// <summary>既定。今までどおり、\ の文字は日本語の中で全角の ￥、¥ の文字は打ったまま。</summary>
+    [Description("¥ (円記号)")] Yen,
+    /// <summary>どちらも半角の \ にする。</summary>
+    [Description("\\ (バックスラッシュ)")] Backslash,
+}
+
 /// <summary>入力中 (変換ボックスに文字があるとき) の Ctrl+キーの割り当て。</summary>
 public enum ControlKeyStyle
 {
@@ -289,6 +298,10 @@ public sealed class Settings
     [Category("1. 全般"), DisplayName("括弧 ( ) を全角にする"),
      Description("日本語入力で打った ( ) を全角の（ ）にします (Mac の日本語入力と同じ)。英単語を囲むとき (人工知能（AI）) も、英文の続きでも全角です。半角にしたいときは、Space で変換して候補から半角の ( ) を選びます。OFF なら今までどおり半角のままです。ON でも、URL の中、/ のすぐ後ろ (app/(auth)/login)、パスのすぐ後ろ (~/dir(1)/a.txt) の括弧と、英数 (直接入力) のときは半角のままです。")]
     public bool FullWidthParentheses { get; set; }
+
+    [Category("1. 全般"), DisplayName("¥ キーで入力する文字"),
+     Description("¥ キーと \\ キーで入れる文字です (Mac の日本語入力の「\"¥\" キーで入力する文字」と同じ)。「¥ (円記号)」は今までどおりで、日本語の中で打った \\ は全角の ￥ になります。「\\ (バックスラッシュ)」にすると、どちらのキーも半角の \\ を入れます (Mac の JIS 配列の ¥ キーも \\ になり、英数 (直接入力) のときにも効きます)。Windows の ¥ キーはもともと \\ の文字なので、変わるのは日本語の中で全角の ￥ にしなくなる点だけです。")]
+    public YenKeyStyle YenKey { get; set; } = YenKeyStyle.Yen;
 
     [Category("1. 全般"), DisplayName("入力モードをカーソルの近くに表示"),
      Description("入力欄をクリックしたときと 半角/全角 を押したときに、カーソルの近くに「あ」(日本語) か「A」(英数) を一瞬表示します。Meltype キーボードの使用中は Windows の IME を OFF にしているので、タスクバーの IME の表示は常に「A」になります。今のモードはこの表示かトレイの Meltype のアイコンで確認してください。")]

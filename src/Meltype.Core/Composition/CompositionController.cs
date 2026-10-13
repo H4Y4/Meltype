@@ -190,6 +190,9 @@ public sealed record CompositionOptions
     /// <summary>日本語入力で打った ( ) を全角の（ ）にするか (設定)。</summary>
     public Func<bool> FullWidthParentheses { get; init; } = () => false;
 
+    /// <summary>¥ キー・\ キーで入れる文字 (設定)。</summary>
+    public Func<Config.YenKeyStyle> YenKey { get; init; } = () => Config.YenKeyStyle.Yen;
+
     /// <summary>確定するときに、日本語と英単語の間に半角スペースを入れるか (設定)。</summary>
     public Func<bool> SpaceAroundEnglish { get; init; } = () => false;
     public Func<bool> AutomaticEnglishSpacing { get; init; } = () => false;
@@ -354,6 +357,7 @@ public sealed class CompositionController
         _text.CorrectTypos = () => _options.CorrectTypos();
         _text.SlashAsMiddleDot = () => _options.SlashAsMiddleDot();
         _text.FullWidthParentheses = () => _options.FullWidthParentheses();
+        _text.YenKey = () => _options.YenKey();
     }
 
     /// <summary>変換ボックスに入力中か、英数状態で打ち始めの語を判定中か。</summary>
@@ -921,7 +925,7 @@ public sealed class CompositionController
         foreach (var word in text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
         {
             // 前の語が日本語でも「日本語の続き」とはしない (空白で区切って打った語なので、語の途中ではない)
-            var typed = new CompositionText(_detector) { PrecedingEnglish = previousEnglish == true ? true : null, Punctuation = _options.Punctuation(), FullWidthParentheses = _options.FullWidthParentheses };
+            var typed = new CompositionText(_detector) { PrecedingEnglish = previousEnglish == true ? true : null, Punctuation = _options.Punctuation(), FullWidthParentheses = _options.FullWidthParentheses, YenKey = _options.YenKey };
             foreach (var c in word) typed.Append(c);
             var segments = typed.Segments(final: true);
             foreach (var segment in segments)

@@ -254,6 +254,9 @@ public sealed class CompositionText
     /// <summary>( ) を全角の（ ）にするか (設定)。ON なら、英語を囲んでいても全角のまま。</summary>
     public Func<bool> FullWidthParentheses { get; set; } = () => false;
 
+    /// <summary>¥ キー・\ キーで入れる文字 (設定)。\ (バックスラッシュ) なら、\ を全角の ￥ にしない。</summary>
+    public Func<YenKeyStyle> YenKey { get; set; } = () => YenKeyStyle.Yen;
+
     /// <summary>
     /// 英単語の最後の n と、続けて打った n + 母音 (の・な …) が「nn → ん」とまとまってしまうのを防ぐ
     /// (python + no → pythonno → python + ん + お ではなく python + の)。
@@ -738,7 +741,7 @@ public sealed class CompositionText
         if (partial)
         {
             // 構造の境界がローマ字単位の途中に入った場合だけ、その区間の原文を読み直す。
-            var fragment = new CompositionText(_detector) { FullWidthParentheses = FullWidthParentheses };
+            var fragment = new CompositionText(_detector) { FullWidthParentheses = FullWidthParentheses, YenKey = YenKey };
             foreach (var c in Raw[from..to]) fragment.Append(c);
             pending = fragment.Pending;
             return [.. fragment.Units];
@@ -1304,8 +1307,8 @@ public sealed class CompositionText
         // # はハッシュタグ・チャンネル名 (Discord の #雑談) で使うので半角のまま (Space で ＃)。
         '#' => '#',
         '/' => '/',
-        // JIS キーボードの ￥ キー
-        '\\' => '￥',
+        // JIS キーボードの ￥ キー。設定で \ (バックスラッシュ) にしていれば半角のまま。
+        '\\' => YenKey() == YenKeyStyle.Backslash ? '\\' : '￥',
         _ when c is >= '!' and <= '~' && !char.IsAsciiLetterOrDigit(c) => (char)(c + 0xFEE0),
         _ => c,
     };
