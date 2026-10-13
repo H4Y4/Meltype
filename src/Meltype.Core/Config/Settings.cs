@@ -286,6 +286,10 @@ public sealed class Settings
      Description("かなのすぐ後ろで打った / を中黒「・」にします (いーろん/ますく → イーロン・マスク)。英字・数字の後ろ (and/or、3/4、URL) と、打ち始めの / (/help) は / のままです。OFF のときも、z/ または / を打って Space で「・」にできます。")]
     public bool SlashAsMiddleDot { get; set; }
 
+    [Category("1. 全般"), DisplayName("括弧 ( ) を全角にする"),
+     Description("日本語入力で打った ( ) を全角の（ ）にします (Mac の日本語入力と同じ)。英単語を囲むとき (人工知能（AI）) も、英文の続きでも全角です。半角にしたいときは、Space で変換して候補から半角の ( ) を選びます。OFF なら今までどおり半角のままです。ON でも、URL の中、/ のすぐ後ろ (app/(auth)/login)、パスのすぐ後ろ (~/dir(1)/a.txt) の括弧と、英数 (直接入力) のときは半角のままです。")]
+    public bool FullWidthParentheses { get; set; }
+
     [Category("1. 全般"), DisplayName("入力モードをカーソルの近くに表示"),
      Description("入力欄をクリックしたときと 半角/全角 を押したときに、カーソルの近くに「あ」(日本語) か「A」(英数) を一瞬表示します。Meltype キーボードの使用中は Windows の IME を OFF にしているので、タスクバーの IME の表示は常に「A」になります。今のモードはこの表示かトレイの Meltype のアイコンで確認してください。")]
     public bool ShowModeIndicator { get; set; } = true;

@@ -66,6 +66,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             SeparateKeyRoles = () => _engine.Settings.SeparateKeyRoles,
             CorrectTypos = () => _engine.Settings.CorrectTypos,
             SlashAsMiddleDot = () => _engine.Settings.SlashAsMiddleDot,
+            FullWidthParentheses = () => _engine.Settings.FullWidthParentheses,
             SpaceAroundEnglish = () => _engine.Settings.SpaceAroundEnglish,
             Punctuation = () => _engine.Settings.Punctuation,
             ControlKeys = () => _engine.Settings.ControlKeys,

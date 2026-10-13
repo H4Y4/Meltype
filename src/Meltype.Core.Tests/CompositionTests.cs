@@ -186,6 +186,9 @@ internal static class CompositionTests
         /// <summary>入力中の Ctrl キーの割り当て (設定)。</summary>
         public Meltype.Config.ControlKeyStyle ControlKeys { get; set; }
 
+        /// <summary>( ) を全角にするか (設定)。</summary>
+        public bool FullWidthParentheses { get; set; }
+
         /// <summary>かな入力で、仮想キーを順に打つ (shift: その打鍵で Shift を押す)。</summary>
         public void TypeKeys(params (int Vk, bool Shift)[] keys)
         {
@@ -253,6 +256,7 @@ internal static class CompositionTests
                 Punctuation = () => Punctuation,
                 ControlKeys = () => ControlKeys,
                 SlashAsMiddleDot = () => slashAsMiddleDot,
+                FullWidthParentheses = () => FullWidthParentheses,
                 Now = now ?? (() => DateTime.Now),
                 ShowTypedKeys = () => showTypedKeys,
                 ShiftArrowPaging = shiftArrowPaging,
@@ -2413,6 +2417,92 @@ internal static class CompositionTests
             settings.Save(path);
             Assert.Equal(Meltype.Config.PunctuationStyle.FullWidthCommaKuten, Meltype.Config.Settings.Load(path).Punctuation);
             Assert.Equal(Meltype.Config.PunctuationStyle.Japanese, new Meltype.Config.Settings().Punctuation, "既定は 、。");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Test]
+    public static void Parentheses_FollowSetting()
+    {
+        // 設定「括弧 ( ) を全角にする」。OFF (既定) は今までどおり半角、ON は英語を囲んでいても全角。
+        string Type(string keys, bool on, string? before = null)
+        {
+            var k = new Keyboard { FullWidthParentheses = on };
+            k.Host.PrecedingText = before;
+            k.Type(keys);
+            return k.Host.Document;
+        }
+        foreach (var (keys, half, full) in new[]
+        {
+            ("kore(nihongo)desu\n", "これ(にほんご)です", "これ（にほんご）です"),
+            ("jinkoutinou(AI)desu\n", "じんこうちのう(AI)です", "じんこうちのう（AI）です"),
+            ("kore(123)desu\n", "これ(123)です", "これ（123）です"),
+            ("(test)\n", "(test)", "（test）"),
+            ("()\n", "()", "（）"),
+        })
+        {
+            Assert.Equal(half, Type(keys, on: false), "OFF は半角: " + keys.TrimEnd());
+            Assert.Equal(full, Type(keys, on: true), "ON は全角: " + keys.TrimEnd());
+        }
+        // 区切りを点数で選ぶ (α版) でも同じ
+        Detector.UseScoredSegmentation = () => true;
+        try
+        {
+            Assert.Equal("（test）", Type("(test)\n", on: true), "点数で選ぶ: 英字だけ");
+            Assert.Equal("じんこうちのう（AI）です", Type("jinkoutinou(AI)desu\n", on: true), "点数で選ぶ: 日本語の中");
+            Assert.Equal("(test)", Type("(test)\n", on: false), "点数で選ぶ: OFF は半角");
+        }
+        finally
+        {
+            Detector.UseScoredSegmentation = null;
+        }
+        // 英文の続き (キャレットの前が英語) でも、ON なら全角
+        Assert.Equal("（maybe）", Type("(maybe)\n", on: true, before: "I think "), "英文の続き");
+        // 閉じていない括弧の後ろが英語でも全角のまま
+        Assert.Equal("（Ooh", Type("(Ooh\n", on: true), "閉じていない括弧");
+        // パスの中の括弧は ON でも半角のまま (OFF と同じ結果になる): / のすぐ後ろ、パスのすぐ後ろ、その中の括弧
+        foreach (var keys in new[] { "app/(auth)/login/page.tsx\n", "~/dir(1)/a.txt\n", "~/a(b(c))/d\n", "C:\\dir(1)\n", "1/(2+3)\n", "https://example.com/a_(b)\n" })
+        {
+            Assert.Equal(Type(keys, on: false), Type(keys, on: true), "パスの中は半角のまま: " + keys.TrimEnd());
+        }
+        // パスを囲む括弧は全角、その中のパスの括弧は半角
+        Assert.Equal("ふぁいる（~/a.txt）をひらく", Type("fairu(~/a.txt)wohiraku\n", on: true), "パスを囲む括弧");
+        Assert.Equal("これ（~/a(1)）です", Type("kore(~/a(1))desu\n", on: true), "パスを囲む括弧と、パスの中の括弧");
+        // 中黒にした / (設定「/ キーで中黒」) の後ろはパスではない
+        var dot = new Keyboard(slashAsMiddleDot: true) { FullWidthParentheses = true };
+        dot.Type("i-ron/(masuku)\n");
+        Assert.Equal("いーろん・（ますく）", dot.Host.Document, "中黒の後ろは全角");
+        // ほかの開きの記号は今までどおり、英語を囲むと半角に戻る
+        Assert.Equal("これ{AI}です", Type("kore{AI}desu\n", on: true), "{ } は対象外");
+        // F10 (半角英数) は打ったまま
+        var f10 = new Keyboard { FullWidthParentheses = true };
+        f10.Type("(a)");
+        f10.Press(VirtualKeys.F10);
+        Assert.Equal("(a)", f10.Showing, "F10 は半角");
+    }
+
+    [Test]
+    public static void Parentheses_FullWidth_HalfWidthCandidate()
+    {
+        // ON でも、Space で変換すれば候補から半角の ( を選べる
+        var k = new Keyboard { FullWidthParentheses = true };
+        k.Type("( ");
+        Assert.Equal("（", k.Host.View!.Candidates[0]);
+        Assert.True(k.Host.View.Candidates.Contains("("), "（ の候補に ( がある: " + string.Join(",", k.Host.View.Candidates));
+    }
+
+    [Test]
+    public static void Parentheses_SettingIsSaved()
+    {
+        Assert.True(!new Meltype.Config.Settings().FullWidthParentheses, "既定は OFF (半角)");
+        var path = Path.Combine(Path.GetTempPath(), $"meltype-parentheses-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(path, "{ \"SettingsVersion\": 5, \"FullWidthParentheses\": true }");
+            Assert.True(Meltype.Config.Settings.Load(path).FullWidthParentheses, "config.json から読む");
         }
         finally
         {

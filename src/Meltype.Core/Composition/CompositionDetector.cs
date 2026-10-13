@@ -117,9 +117,11 @@ public sealed partial class CompositionDetector
     /// <summary>
     /// 英字の後ろの記号 units[i] を、英文の記号 (半角のまま) として扱うか。設定が ON でも、キャレットの前が英語なら英文の続き。
     /// すぐ後ろに英数字が続く . は、ドメイン・拡張子の区切り (tetr.io、MeltypeTip.dll)。
+    /// 設定で全角にした括弧は、英字の後ろでも全角のまま ((test) → （test）)。
     /// </summary>
     private bool KeepsPunctuationAfterEnglish(IReadOnlyList<CompositionUnit> units, int i, string pending, bool? precedingEnglish)
     {
+        if (CompositionText.IsFullWidthParenthesis(units[i])) return false;
         if (units[i].Raw is not ("," or ".") || precedingEnglish == true || UseJapanesePunctuationAfterEnglish?.Invoke() != true) return true;
         var next = i + 1 < units.Count ? units[i + 1].Raw : pending;
         return units[i].Raw == "." && next.Length > 0 && char.IsAsciiLetterOrDigit(next[0]);

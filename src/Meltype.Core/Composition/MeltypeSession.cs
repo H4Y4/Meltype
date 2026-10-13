@@ -221,6 +221,7 @@ public sealed class MeltypeSession
             CandidateMeanings = () => settings.ShowCandidateMeanings,
             CorrectTypos = () => settings.CorrectTypos,
             SlashAsMiddleDot = () => settings.SlashAsMiddleDot,
+            FullWidthParentheses = () => settings.FullWidthParentheses,
             SpaceAroundEnglish = () => settings.SpaceAroundEnglish,
             AutomaticEnglishSpacing = () => autoSpacing,
             ShiftArrowPaging = shiftArrowPaging,
