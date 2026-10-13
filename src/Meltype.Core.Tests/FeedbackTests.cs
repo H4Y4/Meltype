@@ -618,6 +618,37 @@ internal static class CodeProfileTests
     }
 
     [Test]
+    public static void Settings_AppKindsSwitch()
+    {
+        // 要望: アプリごとの種類の使い分けを、アプリ別設定を 1 行ずつ直さずにまとめて止めたい。
+        var settings = new Settings
+        {
+            AppKinds = [new AppKind { Name = "チャット", Base = AppProfile.General, DetectionLevel = DetectionLevel.Aggressive, LiveConversion = false, StartInEnglish = true },
+                        new AppKind { Name = "自作ゲーム", Base = AppProfile.Game }],
+        };
+        settings.AppRules.Add(new AppRule { Process = "Discord.exe", Kind = "チャット" });
+        settings.AppRules.Add(new AppRule { Process = "mygame.exe", Kind = "自作ゲーム" });
+        settings.AppRules.Add(new AppRule { Process = "game.exe", Profile = AppProfile.Game });
+        settings.Normalize();
+        Assert.True(settings.AppKindsEnabled, "既定は ON (今までどおり)");
+
+        settings.AppKindsEnabled = false;
+        Assert.Equal(AppProfile.General, settings.ProfileFor("Code.exe"), "コードのアプリも一般");
+        Assert.Equal(AppProfile.General, settings.ProfileFor("WindowsTerminal.exe"));
+        Assert.True(settings.KindFor("Discord.exe") is null, "独自の種類を使わない");
+        Assert.True(ReferenceEquals(settings, settings.ForApp("Discord.exe")), "独自の種類の判定の強さ・ライブ変換も使わない");
+        Assert.Equal(AppProfile.Game, settings.ProfileFor("game.exe"), "ゲーム (Meltype を止める) はそのまま");
+        Assert.Equal(AppProfile.Game, settings.ProfileFor("mygame.exe"), "ゲームを元にした独自の種類もそのまま");
+        Assert.True(settings.IsGame("game.exe", looksLikeGame: false), "ゲームでは止める");
+        Assert.True(!settings.IsAppEnabled("mstsc.exe"), "アプリごとの自動切替の OFF はそのまま");
+        Assert.Equal(AppProfile.General, settings.Clone().ProfileFor("Code.exe"), "複製しても OFF を保つ");
+
+        settings.AppKindsEnabled = true;
+        Assert.Equal(AppProfile.Code, settings.ProfileFor("Code.exe"), "ON に戻せば元どおり (アプリ別設定は消えない)");
+        Assert.Equal("チャット", settings.KindFor("Discord.exe")?.Name);
+    }
+
+    [Test]
     public static void Settings_CustomAppKinds()
     {
         // 報告: アプリ別設定の種類を、一般とコードだけでなく自分で作れるように。
