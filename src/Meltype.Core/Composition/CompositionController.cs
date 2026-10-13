@@ -1749,18 +1749,22 @@ public sealed class CompositionController
     /// <summary>
     /// 変換エンジンに渡す文脈: キャレットの前の確定済みの文字のうち、同じ文の日本語の部分 (最大 10 文字)。
     /// 文脈を読むニューラルの変換エンジン (<see cref="IContextAwareConverter"/>) には、前の文字が英語でも渡し、
-    /// 同じ入力の中で前にある区間も続ける (最大 20 文字。英単語は字数を使うので長めにする)。
+    /// 同じ入力の中で前にある区間も続ける (最大 40 文字。英単語は字数を使うので長めにする)。
+    /// 文の終わり (。！？) でも切らず、前の文も渡す: 文頭では文脈が無くなり、同音異義語を話題から選べなかった
+    /// (アプリを入れた。+ きどうがおそい → 軌道が遅い。前の文があれば 起動)。行の終わりでは切る。
     /// </summary>
     private string? ConversionContext()
     {
         var aware = _converter is IContextAwareConverter;
         var text = aware ? _precedingText + _compositionBefore : _precedingText;
         if (string.IsNullOrEmpty(text) || (!aware && LanguageOf(text) != false)) return null;
-        var start = text.LastIndexOfAny(SentenceEnds);
+        var start = text.LastIndexOfAny(aware ? LineEnds : SentenceEnds);
         text = text[(start + 1)..].Trim();
-        var limit = aware ? 20 : 10;
+        var limit = aware ? 40 : 10;
         return text.Length == 0 ? null : text.Length > limit ? text[^limit..] : text;
     }
+
+    private static readonly char[] LineEnds = ['\n', '\r'];
 
     private static readonly char[] SentenceEnds = ['。', '．', '！', '？', '\n', '\r'];
 

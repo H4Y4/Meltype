@@ -510,7 +510,8 @@ final class MeltypeInputController: IMKInputController {
     private func surroundingText(of client: IMKTextInput) -> (String?, String?) {
         let selection = client.selectedRange()
         guard selection.location != NSNotFound else { return (nil, nil) }
-        let start = max(0, selection.location - (codeInput ? 4000 : 20))
+        // 変換エンジンに文脈として渡すので、前の文まで届く長さを読む (本体が最後の 40 文字を使う)
+        let start = max(0, selection.location - (codeInput ? 4000 : 60))
         let before = client.attributedSubstring(from: NSRange(location: start, length: selection.location - start))?.string
         let after = client.attributedSubstring(from: NSRange(location: selection.location + selection.length, length: 20))?.string
         return (before, after)

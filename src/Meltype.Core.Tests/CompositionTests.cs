@@ -3636,6 +3636,23 @@ internal static class CompositionTests
     }
 
     [Test]
+    public static void NeuralConverter_ContextIncludesPreviousSentence()
+    {
+        // 文頭でも、前の文を文脈として渡す (文の終わりで切ると、文頭の同音異義語を話題から選べない)。行の終わりでは切る。
+        var converter = new AwareConverter();
+        var k = new Keyboard(converter: converter, moreCandidates: _ => []);
+        k.Host.PrecedingText = "関係ない行\nアプリを入れた。";
+        k.Type("atsui ");
+        Assert.True(converter.Contexts.Count > 0 && converter.Contexts.All(c => c.Context == "アプリを入れた。"),
+            "前の文を渡し、前の行は渡さない: " + string.Join(" / ", converter.Contexts.Select(c => c.Context)));
+        // 文脈を見ない変換エンジンは今までどおり、文の終わりで切る
+        var plain = new Keyboard();
+        plain.Host.PrecedingText = "アプリを入れた。";
+        plain.Type("atsui ");
+        Assert.True(plain.Converter.LastContext is null, "文脈を見ない変換エンジンには前の文を渡さない");
+    }
+
+    [Test]
     public static void NeuralConverter_ContextContinuesAfterSymbol()
     {
         // 半角の記号で分かれた後ろのかなにも、同じ区間の中で前にある文字を文脈として渡す
