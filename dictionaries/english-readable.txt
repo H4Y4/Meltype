@@ -22,3 +22,5 @@ overchoice
 enumerate
 # fatigue は ふぁちぐえ と読めるが、日本語の語ではない (issue #536)
 fatigue
+# 技術の語。ローマ字としても読めるが日本語の語ではない (databaseno → だたばせの になっていた)
+database databases

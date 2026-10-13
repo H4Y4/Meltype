@@ -111,12 +111,23 @@ final class MeltypeConverter {
         return candidates
     }
 
+    /// カタカナの読みをひらがなにする。長音「ー」はそのまま残す。
+    /// applyingTransform(.hiraganaToKatakana, reverse: true) は メール を めえる にするので、読みをつなげても元のかなに戻らず、
+    /// 長音を含む文 (メール・サーバー・データ) は全体が 1 つの文節になっていた (文節ごとに選び直せない)。
+    private static func hiragana(_ katakana: String) -> String {
+        var scalars = String.UnicodeScalarView()
+        for scalar in katakana.unicodeScalars {
+            scalars.append((0x30A1...0x30F6).contains(scalar.value) ? Unicode.Scalar(scalar.value - 0x60)! : scalar)
+        }
+        return String(scalars)
+    }
+
     /// 文節に区切った変換結果 (読みをつなげると元のひらがなになる)。変換できなければ空。
     func clauses(for hiragana: String, context: String?) -> [(reading: String, text: String)] {
         guard let best = results(for: hiragana, neural: true, context: context).first else { return [] }
         var clauses: [(reading: String, text: String)] = []
         for element in best.data {
-            let reading = element.ruby.applyingTransform(.hiraganaToKatakana, reverse: true) ?? element.ruby
+            let reading = MeltypeConverter.hiragana(element.ruby)
             // 助詞・助動詞 (ひらがなだけの短い語) は前の文節にくっつける (今日|は → 今日は)。
             if let last = clauses.last, element.word == reading, element.word.count <= 3 {
                 clauses[clauses.count - 1] = (last.reading + reading, last.text + element.word)

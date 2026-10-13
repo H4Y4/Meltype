@@ -271,6 +271,11 @@ public sealed class CompositionController
     private readonly CompositionText _text;
     private readonly CompositionDetector _detector;
     private readonly IKanjiConverter _converter;
+    /// <summary>
+    /// 文脈を読むニューラルの変換エンジン (Mac 版の azooKey の Zenzai) か。文全体と前の文字を見て区切りと漢字を選ぶので、
+    /// 文脈を見ない変換エンジンの苦手を補うための加工 (仮の文脈・助詞をかなに戻す・同梱の語句で読みを切る など) は、正しい結果を壊す。
+    /// </summary>
+    private bool Neural => _converter is IContextAwareConverter;
     private readonly ICompositionHost _host;
     private readonly CompositionOptions _options;
     private readonly Dictionary<string, string> _conversionCache = new(StringComparer.Ordinal);
@@ -1331,7 +1336,8 @@ public sealed class CompositionController
             var japanese = ConvertJapanese(segment.Kana);
             _compositionBefore = "";
             // 英単語 + する (push|した、deploy|しよう): 変換エンジンは英語の後ろの「した」だけを見て 下・死体・使用 にしてしまう。かなのまま
-            if (s > 0 && segments[s - 1].IsEnglish && japanese.Count > 0 && IsSuruAfterEnglish(japanese[0])) Prefer(japanese[0], japanese[0].Reading);
+            // ニューラルの変換エンジンは、前の英単語を文脈に見て pushした・cpu使用率 を自分で選び分ける (かなに戻すと cpuしようりつ になる)。
+            if (!Neural && s > 0 && segments[s - 1].IsEnglish && japanese.Count > 0 && IsSuruAfterEnglish(japanese[0])) Prefer(japanese[0], japanese[0].Reading);
             // 候補の最後に、打ったままの英字 (あぴ → api) と全角の英字も出す (Space を連打して英字に戻せる)。
             var offset = 0;
             foreach (var clause in japanese)
@@ -1435,18 +1441,40 @@ public sealed class CompositionController
         {
             var result = new List<Clause>();
             var start = 0;
+            var outer = _compositionBefore;
             for (var i = 1; i <= kana.Length; i++)
             {
                 if (i < kana.Length && keep[i] == keep[start]) continue;
                 var run = kana[start..i];
                 // ユーザー辞書に英字のまま登録した読み (zh → ←) はここでも引く
                 if (keep[start]) result.Add(new Clause(run, false, Distinct([.. _options.UserDictionary?.Lookup(run) ?? [], run, .. _options.Candidates?.Lookup(run) ?? [], CompositionText.ToFullWidth(run)])));
-                else result.AddRange(ConvertJapanese(run));
+                else
+                {
+                    // 記号の後ろの区間には、同じ区間の中で前にある文字も文脈として続ける (前の区間を飛ばした古い文脈は、文脈なしより悪い)。
+                    _compositionBefore = outer + string.Concat(result.Select(c => c.Text));
+                    result.AddRange(ConvertJapanese(run));
+                }
                 start = i;
             }
+            _compositionBefore = outer;
             return result;
         }
         if (_options.UserDictionary?.Split(kana) is not { } split) return ConvertWithEngine(kana);
+        // 同梱の語句 (phrases.txt) は、変換エンジンが区切りを間違える語句を補うもの。ニューラルの変換エンジンは自分で正しく区切れるので、
+        // 読みの途中の一致で切ると壊す (しゅうしょくじょうきょう → 集|食事|ょうきょう、ばしょせんたく → ば|所詮|たく)。
+        // ユーザーが登録した語だけで区切る。
+        if (Neural && _options.UserDictionary is { } userWords)
+        {
+            var kept = new List<(string Reading, string? Word)>();
+            foreach (var (reading, word) in split)
+            {
+                var use = word is not null && userWords.IsUserReading(reading);
+                if (!use && kept.Count > 0 && kept[^1].Word is null) kept[^1] = (kept[^1].Reading + reading, null);
+                else kept.Add((reading, use ? word : null));
+            }
+            if (kept.All(p => p.Word is null)) return ConvertWithEngine(kana);
+            split = kept;
+        }
         var pieces = AlignUserWords(kana, split);
         if (pieces.All(p => p.Word is null && p.Engine is null)) return ConvertWithEngine(kana);
         var clauses = new List<Clause>();
@@ -1467,7 +1495,10 @@ public sealed class CompositionController
         foreach (var clause in clauses)
         {
             var surrounding = (_precedingText ?? "") + string.Concat(clauses.Where(c => c != clause).Select(c => c.Text)) + (_followingText ?? "");
-            var preferred = _options.ContextRules?.Choose(clause.Reading, surrounding) ?? (registered.Contains(clause) ? _options.History?.Get(clause.Reading) : null);
+            var learned = registered.Contains(clause) ? _options.History?.Get(clause.Reading) : null;
+            var preferred = Neural
+                ? learned ?? _options.ContextRules?.ChooseOver(clause.Reading, surrounding, clause.Text)
+                : _options.ContextRules?.Choose(clause.Reading, surrounding) ?? learned;
             if (preferred is not null) Prefer(clause, preferred);
         }
         return clauses;
@@ -1551,10 +1582,11 @@ public sealed class CompositionController
         // 文脈が無いまま「に」で始まる読みを変換すると、変換エンジンは「に」を語の頭と読む (になってしまう → 担ってしまう)。
         // 前の文脈が取れないときは、仮の文脈「これ」を付けて助詞として読ませる (これ + になってしまう → になってしまう)。
         // 「は」「で」なども助詞になりうるが、仮の文脈を付けると はしる → は知る のように崩れるので「に」だけ。
+        // ニューラルの変換エンジンには付けない: 仮の文脈なしでも助詞の「に」は読め、付けると にじがでた → に自我出た になる。
         var context = ConversionContext();
         var parts = engine ?? (context is not null
             ? ConvertWithContext(kana, context)
-            : _converter.ConvertClauses(kana, kana.Length >= 3 && kana[0] == 'に' ? "これ" : null));
+            : _converter.ConvertClauses(kana, !Neural && kana.Length >= 3 && kana[0] == 'に' ? "これ" : null));
         parts ??= [new ConversionClause(kana, _converter.Convert(kana) ?? kana)];
         // 読み全体が補助辞書・絵文字の辞書の語 (かんがえるかお → 🤔) なら、文節に分けずに 1 つの文節にして候補を出す。
         if (parts.Count > 1 && _options.Candidates?.Contains(kana) == true)
@@ -1567,13 +1599,18 @@ public sealed class CompositionController
         {
             var others = string.Concat(clauses.Where((_, k) => k != i).Select(c => c.Text));
             var surrounding = (_precedingText ?? "") + others + (_followingText ?? "");
-            var preferred = _options.ContextRules?.Choose(clauses[i].Reading, surrounding) ?? _options.History?.Get(clauses[i].Reading);
+            // ニューラルの変換エンジンでは、ユーザーが選び直したもの (学習) を手がかり辞書より先にし、手がかり辞書は控えめに使う。
+            var preferred = Neural
+                ? _options.History?.Get(clauses[i].Reading) ?? _options.ContextRules?.ChooseOver(clauses[i].Reading, surrounding, clauses[i].Text)
+                : _options.ContextRules?.Choose(clauses[i].Reading, surrounding) ?? _options.History?.Get(clauses[i].Reading);
             // 変換エンジンは、文節が「から」だけだと記号 (～) にしてしまう。記号だけの変換結果は、ひらがなの後ろに回す。
             preferred ??= IsSymbolOnly(clauses[i].Text) && clauses[i].Reading.All(c => c is >= 'ぁ' and <= 'ゖ') ? clauses[i].Reading : null;
             // 英単語に挟まれて助詞だけの文節になると、変換エンジンは漢字にしてしまう (github + に + push → 二)。助詞はかなのまま。
-            preferred ??= Particles.Contains(clauses[i].Reading) && clauses[i].Text != clauses[i].Reading ? clauses[i].Reading : null;
+            // (ニューラルの変換エンジンは前の英単語を文脈に見るので起きない。かなに戻すと とをあける → とを開ける になる)
+            preferred ??= !Neural && Particles.Contains(clauses[i].Reading) && clauses[i].Text != clauses[i].Reading ? clauses[i].Reading : null;
             // カタカナの語の後ろの「っ」で始まる文節 (スパイダーマ + っ！) は、カタカナの「ッ」にする (スパイダーマッ！)。
-            preferred ??= i > 0 && clauses[i].Text.StartsWith('っ') && clauses[i - 1].Text is [.., var last] && last is >= 'ァ' and <= 'ヺ' or 'ー'
+            // (ニューラルの変換エンジンは自分で スパイダーマッ にする。「ッ」にすると アニメっていうのは → アニメッていうのは になる)
+            preferred ??= !Neural && i > 0 && clauses[i].Text.StartsWith('っ') && clauses[i - 1].Text is [.., var last] && last is >= 'ァ' and <= 'ヺ' or 'ー'
                 ? "ッ" + clauses[i].Text[1..] : null;
             // 文頭・記号の後ろの「え、」「え？」(聞き返し) を、変換エンジンは 得 にしてしまう (得、知らん)。かなのまま
             preferred ??= IsInterjection(clauses, i) ? clauses[i].Reading : null;
@@ -1712,18 +1749,22 @@ public sealed class CompositionController
     /// <summary>
     /// 変換エンジンに渡す文脈: キャレットの前の確定済みの文字のうち、同じ文の日本語の部分 (最大 10 文字)。
     /// 文脈を読むニューラルの変換エンジン (<see cref="IContextAwareConverter"/>) には、前の文字が英語でも渡し、
-    /// 同じ入力の中で前にある区間も続ける (最大 20 文字。英単語は字数を使うので長めにする)。
+    /// 同じ入力の中で前にある区間も続ける (最大 40 文字。英単語は字数を使うので長めにする)。
+    /// 文の終わり (。！？) でも切らず、前の文も渡す: 文頭では文脈が無くなり、同音異義語を話題から選べなかった
+    /// (アプリを入れた。+ きどうがおそい → 軌道が遅い。前の文があれば 起動)。行の終わりでは切る。
     /// </summary>
     private string? ConversionContext()
     {
         var aware = _converter is IContextAwareConverter;
         var text = aware ? _precedingText + _compositionBefore : _precedingText;
         if (string.IsNullOrEmpty(text) || (!aware && LanguageOf(text) != false)) return null;
-        var start = text.LastIndexOfAny(SentenceEnds);
+        var start = text.LastIndexOfAny(aware ? LineEnds : SentenceEnds);
         text = text[(start + 1)..].Trim();
-        var limit = aware ? 20 : 10;
+        var limit = aware ? 40 : 10;
         return text.Length == 0 ? null : text.Length > limit ? text[^limit..] : text;
     }
+
+    private static readonly char[] LineEnds = ['\n', '\r'];
 
     private static readonly char[] SentenceEnds = ['。', '．', '！', '？', '\n', '\r'];
 
@@ -1823,7 +1864,10 @@ public sealed class CompositionController
         // ユーザー辞書に登録した単語は、文の中での変換結果の次に出す (文節の区切りを変えて読みが一致したときなど)。
         var candidates = Distinct(inContext);
         foreach (var word in _options.UserDictionary?.Lookup(reading) ?? []) if (!candidates.Contains(word)) candidates.Add(word);
-        if (Convert(reading) is var standalone && !candidates.Contains(standalone)) candidates.Add(standalone);
+        // その文節だけで変換した結果。ニューラルの変換エンジンでは頼まない: 文節の数だけニューラル変換が余分に走り (打つたび・Space のたび)、
+        // 文全体の変換のあいだに別の読みが挟まると、変換エンジンが前回の続きから計算できなくなって遅くなる。
+        // 文節を選んだときに、候補の一覧 (MoreCandidates) から同じものが入る (Expand)。
+        if (!(Neural && _options.MoreCandidates is not null) && Convert(reading) is var standalone && !candidates.Contains(standalone)) candidates.Add(standalone);
         foreach (var extra in _options.Candidates?.LookupWords(reading) ?? [])
         {
             if (!candidates.Contains(extra)) candidates.Add(extra);
@@ -2202,8 +2246,11 @@ public sealed class CompositionController
     /// </summary>
     private string LiveConvert(string kana)
     {
-        if (kana.Length < LiveConversionMinLength) return kana;
         var before = _text.RenderedBefore;
+        // 短いかなは、打っている途中で別の語に化けやすいので変換しない (Space で変換する)。
+        // ただし、同じ入力の中で前に区間がある (mail + をみる) なら、ニューラルの変換エンジンは前の語を文脈に見て正しく選べるので変換する
+        // (mailをみる・pcをかう のまま確定されていた)。
+        if (kana.Length < LiveConversionMinLength && !(Neural && before.Length > 0)) return kana;
         var key = string.Join("\u0001", kana, _precedingText, _followingText, _options.History?.Version, before);
         if (_liveCache.TryGetValue(key, out var cached)) return cached;
         _compositionBefore = before;

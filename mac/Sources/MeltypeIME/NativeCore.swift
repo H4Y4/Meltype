@@ -46,6 +46,9 @@ nonisolated(unsafe) private var spellChecks = 0
 private let isWordCallback: IsWordCallback = { word in
     guard let word else { return 0 }
     let text = String(cString: word)
+    // macOS のスペルチェッカーは、73 文字以上の文字列をどれも「正しい綴り」と返す (意味のない英字の並びでも)。
+    // 長い文を続けて打つと、文全体が英単語と判定されて英字のまま確定されていた。それほど長い英単語は無いので、英単語ではないと返す。
+    if text.utf8.count > 45 { return 0 }
     let cached: Bool? = spellCacheLock.withLock {
         if Date() >= spellCacheExpiration {
             spellCache.removeAll(keepingCapacity: true)
