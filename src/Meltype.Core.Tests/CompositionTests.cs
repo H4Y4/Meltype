@@ -3554,13 +3554,77 @@ internal static class CompositionTests
     {
         private readonly FakeConverter _inner = new();
         public List<(string Kana, string? Context)> Contexts { get; } = [];
-        public string? Convert(string hiragana) => _inner.Convert(hiragana);
+        /// <summary>文節に分けない変換 (Convert) を頼まれたかな。</summary>
+        public List<string> Standalone { get; } = [];
+        /// <summary>かな → 変換エンジンが返す文節 (文全体を見て選んだ結果の代わり)。無ければ FakeConverter の結果。</summary>
+        public Dictionary<string, ConversionClause[]> Script { get; } = [];
+        public string? Convert(string hiragana)
+        {
+            Standalone.Add(hiragana);
+            return Script.TryGetValue(hiragana, out var clauses) ? string.Concat(clauses.Select(c => c.Text)) : _inner.Convert(hiragana);
+        }
 
         public IReadOnlyList<ConversionClause>? ConvertClauses(string hiragana, string? context = null)
         {
             Contexts.Add((hiragana, context));
-            return _inner.ConvertClauses(hiragana, context);
+            return Script.TryGetValue(hiragana, out var clauses) ? clauses : _inner.ConvertClauses(hiragana, context);
         }
+    }
+
+    [Test]
+    public static void NeuralConverter_EngineResultIsNotOverridden()
+    {
+        // 文脈を読むニューラルの変換エンジンは、文全体と前の文字を見て区切りと漢字を選ぶ。
+        // 文脈を見ない変換エンジンの苦手を補うための加工で、その結果を壊さない (どれも実際に壊れていた例)。
+        (string Typed, string? Before, (string Reading, string Text)[] Engine, string Expected, string Why)[] cases =
+        [
+            ("nijigadeta ", null, [("にじ", "虹"), ("がでた", "が出た")], "虹が出た", "「に」で始まっても仮の文脈を付けない"),
+            ("towoakeru ", null, [("と", "戸"), ("をあける", "を開ける")], "戸を開ける", "助詞と同じ読みの文節をかなに戻さない"),
+            ("animetteiunoha ", null, [("あにめ", "アニメ"), ("っていうのは", "っていうのは")], "アニメっていうのは", "カタカナの後ろの っ を ッ にしない"),
+            ("kawarini ", "この本の", [("かわりに", "代わりに")], "代わりに", "手がかり辞書の かわ → 革 (手がかり: 本) を、かわりに に当てない"),
+            ("gohanwotabetekarahasiru ", null, [("ごはんをたべてから", "ご飯を食べてから"), ("はしる", "走る")], "ご飯を食べてから走る", "手がかり辞書の はし → 箸 を、はしる に当てない"),
+            ("syuusyokujoukyou ", null, [("しゅうしょく", "就職"), ("じょうきょう", "状況")], "就職状況", "同梱の語句 (しょくじ) で読みの途中を切らない"),
+            ("basyosentaku ", null, [("ばしょ", "場所"), ("せんたく", "選択")], "場所選択", "同梱の語句 (しょせん) で読みの途中を切らない"),
+        ];
+        foreach (var (typed, before, engine, expected, why) in cases)
+        {
+            var converter = new AwareConverter();
+            var kana = string.Concat(engine.Select(e => e.Reading));
+            converter.Script[kana] = engine.Select(e => new ConversionClause(e.Reading, e.Text)).ToArray();
+            var k = new Keyboard(converter: converter, userDictionary: new UserDictionary(null), moreCandidates: _ => []);
+            if (before is not null) k.Host.PrecedingText = before;
+            k.Type(typed);
+            Assert.Equal(expected, string.Concat(k.Host.View!.Clauses!), why);
+            Assert.True(converter.Contexts.All(c => c.Context != "これ"), "仮の文脈「これ」を渡さない: " + why);
+            // 文節だけの変換を頼まない (文節の数だけニューラル変換が余分に走り、文全体の変換の続きの計算も途切れる)
+            Assert.True(converter.Contexts.All(c => c.Kana == kana) && converter.Standalone.Count == 0,
+                $"文全体だけを変換する: {string.Join(" / ", converter.Contexts.Select(c => c.Kana).Concat(converter.Standalone))}");
+        }
+        // 英単語の後ろの する の活用をかなに戻さない (cpu + しようりつ)。pushした は変換エンジンが自分でかなにする
+        var mixed = new AwareConverter();
+        mixed.Script["しようりつ"] = [new("しようりつ", "使用率")];
+        var m = new Keyboard(converter: mixed, moreCandidates: _ => []);
+        m.Type("cpusiyouritu ");
+        Assert.Equal("cpu使用率", string.Concat(m.Host.View!.Clauses!), "英単語の後ろの しよう… をかなに戻さない");
+        // 文脈を見ない変換エンジン (Mozc・Microsoft IME) は今までどおり
+        var plain = new Keyboard();
+        plain.Type("ninatteshimau ");
+        Assert.Equal("これ", plain.Converter.LastContext, "文脈を見ない変換エンジンには仮の文脈を付ける");
+    }
+
+    [Test]
+    public static void ContextRules_ChooseOver_OnlyReselectsAmongHomophones()
+    {
+        var rules = ContextRules.Load(null);
+        Assert.Equal(null, rules.ChooseOver("かわりに", "この本の製品", "代わりに"), "エンジンが 革・皮・川 を選んでいないなら、かわ の規則を かわりに に当てない");
+        Assert.Equal(null, rules.ChooseOver("はしる", "ご飯を食べてから", "走る"), "走る を 箸る にしない");
+        Assert.Equal(null, rules.ChooseOver("かわ", "日本の", "川"), "1 文字の手がかり (本) だけでは上書きしない");
+        Assert.Equal(null, rules.ChooseOver("え", "ほんと", "絵"), "1 文字の読みの規則は使わない");
+        Assert.Equal("暑い", rules.ChooseOver("あつい", "今日は気温が高い", "熱い"), "同音異義語の中の選び直しはする");
+        Assert.Equal("暑いので", rules.ChooseOver("あついので", "今日は気温が高い", "熱いので"), "後ろに語が付いていても選び直す");
+        Assert.Equal(null, rules.ChooseOver("あつい", "今日は気温が高い", "暑い"), "エンジンが手がかりに合う候補を選んでいれば、そのまま");
+        Assert.Equal("垢", rules.ChooseOver("あか", "Twitterのアカウント", "赤"), "読み全体の規則は、エンジンが別の字を出していても使う");
+        Assert.Equal(null, rules.ChooseOver("あつい", "", "熱い"), "前後の文字が無ければ使わない");
     }
 
     [Test]

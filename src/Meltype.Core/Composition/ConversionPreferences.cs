@@ -71,6 +71,31 @@ public sealed class ContextRules
         }
         return null;
     }
+
+    /// <summary>
+    /// 文脈を読むニューラルの変換エンジン (<see cref="IContextAwareConverter"/>) 向けの <see cref="Choose"/>。
+    /// エンジンは文全体と前の文字を見て選んでいるので、規則で上書きするのは、手がかりがはっきりしていて、エンジンの選択を裏付ける手がかりが無いときだけ:
+    ///   - 1 文字の読み (え) の規則と、1 文字の手がかり (本・手・人) は使わない (日本語・本家 の 本 で かわ → 革 になっていた)
+    ///   - 読みの途中までの規則 (かわ + りに、はし + る) は、エンジンの結果がその規則の候補のどれか (革・皮・川) で始まるときだけ
+    ///     (代わりに → 革りに、走る → 箸る にしない)。読み全体の規則 (あか → 垢) は、エンジンが別の字を出していても使う
+    ///   - エンジンが選んだ候補にも同じだけ手がかりがあるなら、エンジンのまま
+    /// engineText は、変換エンジンがその文節に出した文字。
+    /// </summary>
+    public string? ChooseOver(string reading, string surrounding, string engineText)
+    {
+        if (surrounding.Length == 0) return null;
+        for (var length = reading.Length; length >= 2; length--)
+        {
+            if (!_rules.TryGetValue(reading[..length], out var list)) continue;
+            var hits = list.Select(rule => rule.Cues.Count(cue => cue.Length >= 2 && surrounding.Contains(cue, StringComparison.Ordinal))).ToList();
+            var best = hits.IndexOf(hits.Max());
+            if (hits[best] == 0) return null;
+            var chosen = list.FindIndex(rule => engineText.StartsWith(rule.Candidate, StringComparison.Ordinal));
+            if (chosen < 0) return length == reading.Length ? list[best].Candidate : null;
+            return hits[chosen] >= hits[best] ? null : list[best].Candidate + reading[length..];
+        }
+        return null;
+    }
 }
 
 /// <summary>
