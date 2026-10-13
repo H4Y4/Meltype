@@ -612,6 +612,10 @@ public sealed class Settings
      Description("Steam・Epic Games・Riot Games・EA・Ubisoft・Battle.net・Xbox のゲームのフォルダーにあるアプリ (ウィンドウ表示のゲームも) では、Meltype は何もしません (キーを横取りせず、Windows の IME にも触らないので、ゲームのチャットは Windows の IME で打てます)。ほかのゲームは、アプリ別設定で種類を「ゲーム」にしてください。")]
     public bool StopInGames { get; set; } = true;
 
+    [Category("7. アプリ"), DisplayName("アプリの種類で動作を変える"),
+     Description("OFF にすると、アプリ別設定の種類「コード」と独自の種類を使わず、どのアプリでも「一般」として同じ動作にします (VS Code やターミナルでも、ほかのアプリと同じように日本語を判定します)。アプリ別設定の中身は消えないので、ON に戻せば元どおりです。アプリごとの自動切替の OFF と、種類「ゲーム」(Meltype を止める) は、OFF にしてもそのまま効きます。")]
+    public bool AppKindsEnabled { get; set; } = true;
+
     [Category("7. アプリ"), DisplayName("アプリ別設定"), Description("プロセス名ごとに、自動切替の ON/OFF と種類を指定します。種類「コード」(コードエディター・ターミナル) では基本は英数のままで、コメント (// # -- など) と文字列 (\"…\" など) の中だけ日本語を判定します。コードの行で 半角/全角 を押すと、その行だけ日本語で入力できます。README.md などの文章ファイルを開いているときは一般として扱います。")]
     public List<AppRule> AppRules { get; set; } = DefaultAppRules();
 
@@ -655,12 +659,20 @@ public sealed class Settings
     public bool IsGame(string? processName, bool looksLikeGame) =>
         ProfileFor(processName) == AppProfile.Game || (StopInGames && looksLikeGame && FindRule(processName) is null);
 
-    /// <summary>アプリの種類 (アプリ別設定に無ければ一般)。独自の種類なら、その元にした種類。</summary>
-    public AppProfile ProfileFor(string? processName) =>
-        KindFor(processName)?.Base ?? FindRule(processName)?.Profile ?? AppProfile.General;
+    /// <summary>
+    /// アプリの種類 (アプリ別設定に無ければ一般)。独自の種類なら、その元にした種類。
+    /// 「アプリの種類で動作を変える」が OFF なら、ゲーム (Meltype を止める) 以外はすべて一般。
+    /// </summary>
+    public AppProfile ProfileFor(string? processName)
+    {
+        var profile = AssignedKind(processName)?.Base ?? FindRule(processName)?.Profile ?? AppProfile.General;
+        return AppKindsEnabled || profile == AppProfile.Game ? profile : AppProfile.General;
+    }
 
-    /// <summary>アプリに割り当てた独自の種類 (無ければ null)。</summary>
-    public AppKind? KindFor(string? processName) =>
+    /// <summary>アプリに割り当てた独自の種類 (無ければ null)。「アプリの種類で動作を変える」が OFF なら null。</summary>
+    public AppKind? KindFor(string? processName) => AppKindsEnabled ? AssignedKind(processName) : null;
+
+    private AppKind? AssignedKind(string? processName) =>
         FindRule(processName)?.Kind is { Length: > 0 } name ? AppKinds.FirstOrDefault(k => k.Name == name) : null;
 
     /// <summary>アプリの独自の種類で変えた項目 (判定の強さ・ライブ変換) を反映した設定。変えていなければ自分自身。</summary>
