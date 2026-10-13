@@ -3613,6 +3613,43 @@ internal static class CompositionTests
     }
 
     [Test]
+    public static void NeuralConverter_LiveConvertsShortKanaAfterEnglish()
+    {
+        // 報告: mailwomiru が mailをみる のまま確定される (4 かな未満は打っている途中に変換しないため)。
+        // 同じ入力の中で前に区間があれば、ニューラルの変換エンジンは前の語を文脈に見て選べるので変換する。
+        var converter = new AwareConverter();
+        converter.Script["をみる"] = [new("をみる", "を見る")];
+        var k = new Keyboard(live: true, converter: converter, moreCandidates: _ => []);
+        k.Type("mailwomiru");
+        Assert.Equal("mailを見る", k.Showing, "英単語の後ろの短いかなも変換する");
+        Assert.True(converter.Contexts.Any(c => c.Kana == "をみる" && c.Context == "mail"), "前の英単語を文脈に渡す");
+        // 前に区間が無い短いかなは、今までどおり変換しない (打っている途中で別の語に化けやすい)
+        var alone = new AwareConverter();
+        alone.Script["みる"] = [new("みる", "見る")];
+        var a = new Keyboard(live: true, converter: alone, moreCandidates: _ => []);
+        a.Type("miru");
+        Assert.Equal("みる", a.Showing, "短いかなだけの入力は変換しない");
+        // 文脈を見ない変換エンジンは今までどおり
+        var plain = new Keyboard(live: true);
+        plain.Type("mailwomiru");
+        Assert.Equal("mailをみる", plain.Showing, "文脈を見ない変換エンジンでは変換しない");
+    }
+
+    [Test]
+    public static void NeuralConverter_ContextContinuesAfterSymbol()
+    {
+        // 半角の記号で分かれた後ろのかなにも、同じ区間の中で前にある文字を文脈として渡す
+        // (記号より前を飛ばした古い文脈が渡り、文脈なしより悪い結果になっていた)。
+        var converter = new AwareConverter();
+        var k = new Keyboard(converter: converter, moreCandidates: _ => []);
+        k.Host.PrecedingText = "前の文。";
+        k.Type("atsui(samui ");
+        var after = converter.Contexts.Where(c => c.Kana == "さむい").Select(c => c.Context).ToList();
+        Assert.True(after.Count > 0 && after.All(c => c is not null && c.EndsWith('(') && c.Length > 1),
+            "記号の後ろのかなの文脈に、前のかなと記号を続ける: " + string.Join(" / ", after));
+    }
+
+    [Test]
     public static void ContextRules_ChooseOver_OnlyReselectsAmongHomophones()
     {
         var rules = ContextRules.Load(null);

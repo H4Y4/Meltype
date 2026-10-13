@@ -1441,15 +1441,22 @@ public sealed class CompositionController
         {
             var result = new List<Clause>();
             var start = 0;
+            var outer = _compositionBefore;
             for (var i = 1; i <= kana.Length; i++)
             {
                 if (i < kana.Length && keep[i] == keep[start]) continue;
                 var run = kana[start..i];
                 // ユーザー辞書に英字のまま登録した読み (zh → ←) はここでも引く
                 if (keep[start]) result.Add(new Clause(run, false, Distinct([.. _options.UserDictionary?.Lookup(run) ?? [], run, .. _options.Candidates?.Lookup(run) ?? [], CompositionText.ToFullWidth(run)])));
-                else result.AddRange(ConvertJapanese(run));
+                else
+                {
+                    // 記号の後ろの区間には、同じ区間の中で前にある文字も文脈として続ける (前の区間を飛ばした古い文脈は、文脈なしより悪い)。
+                    _compositionBefore = outer + string.Concat(result.Select(c => c.Text));
+                    result.AddRange(ConvertJapanese(run));
+                }
                 start = i;
             }
+            _compositionBefore = outer;
             return result;
         }
         if (_options.UserDictionary?.Split(kana) is not { } split) return ConvertWithEngine(kana);
@@ -2235,8 +2242,11 @@ public sealed class CompositionController
     /// </summary>
     private string LiveConvert(string kana)
     {
-        if (kana.Length < LiveConversionMinLength) return kana;
         var before = _text.RenderedBefore;
+        // 短いかなは、打っている途中で別の語に化けやすいので変換しない (Space で変換する)。
+        // ただし、同じ入力の中で前に区間がある (mail + をみる) なら、ニューラルの変換エンジンは前の語を文脈に見て正しく選べるので変換する
+        // (mailをみる・pcをかう のまま確定されていた)。
+        if (kana.Length < LiveConversionMinLength && !(Neural && before.Length > 0)) return kana;
         var key = string.Join("\u0001", kana, _precedingText, _followingText, _options.History?.Version, before);
         if (_liveCache.TryGetValue(key, out var cached)) return cached;
         _compositionBefore = before;
