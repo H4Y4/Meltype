@@ -1071,6 +1071,9 @@ internal static class LanguageLearningTests
                 ("mailkara", "mailから"), ("modelkeisiki", "modelけいしき"), ("kyouhasqlkarayaru", "きょうはsqlからやる"),
                 // 短い英語 (git・css・npm) のすぐ後ろの日本語の語が、丸ごと英字になっていた (本家 #537 の procrasticle の対策の行き過ぎ)
                 ("gitkakunin", "gitかくにん"), ("csskeitou", "cssけいとう"), ("npmkanri", "npmかんり"), ("llmkatuyou", "llmかつよう"), ("mackeitou", "macけいとう"), ("procrasticle", "procrasticle"),
+                // 英単語に挟まれた日本語の語の途中の to が、助詞の「と」になっていた (本家 #154 の abc + to + def の対策の行き過ぎ)
+                ("githubnitourokusitapassword", "githubにとうろくしたpassword"), ("pythondetoukeiwoplotsuru", "pythonでとうけいをplotする"), ("slacknitoukousitalink", "slackにとうこうしたlink"),
+                ("ctrlkeitounoshortcut", "ctrlけいとうのshortcut"), ("abctodef", "abcとdef"), ("gittogithub", "gitとgithub"),
                 // Issue #220: 表示では tabで なのに、確定すると打ち間違いとして たべ に直されていた
                 ("tabde", "tabで"), ("tabga", "tabが"), ("kyouhatabdeyaru", "きょうはtabでやる"), ("tabete", "たべて"), ("onegaishimsu", "おねがいします"),
                 // 伸ばす音の う + について (そう|u|ni|t の unit) で、t と s が つ にならず英単語 unit になっていた。英単語 + する (commit|する) は今までどおり

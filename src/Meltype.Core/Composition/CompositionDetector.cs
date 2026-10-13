@@ -199,6 +199,11 @@ public sealed partial class CompositionDetector
                     if (_romaji.Analyze(left.ToLowerInvariant()) is { IsValid: true, Partial: "" or "n" }) continue;
                     if (_romaji.Analyze(right.ToLowerInvariant()) is { IsValid: true, Partial: "" or "n" }) continue;
                     if (IsKnownEnglishWord(left + "to")) continue;
+                    // to の前後が日本語の読みなら、日本語の語の途中の to (githubni + touroku + sitapassword、ctrl + keitou + noshortcut)。
+                    // 左が読めるローマ字で終わる (ni・kei) か、右が読めるローマ字で長く始まる (urokusita) ときは助詞にしない。
+                    if (!IsKnownEnglishWord(left) && EndsWithReadableRomaji(left.ToLowerInvariant())) continue;
+                    if (!IsKnownEnglishWord(right) && _romaji.Analyze(right.ToLowerInvariant()).Tokens.Sum(t => t.Romaji.Length) >= 5) continue;
+                    if (IsKnownEnglishWord(left + "to")) continue;
                     // 左が英単語でなく、to までで日本語の語 (chotto の っと) になるか、to が英単語の途中 (stories・symptom) なら助詞ではない
                     if (!IsKnownEnglishWord(left) && (EndsWithJapaneseWord(raw.ToLowerInvariant()[..(end + 2)]) || ToInsideEnglishWord(raw.ToLowerInvariant(), end))) continue;
                     return [new CompositionSegment(true, "", left),
@@ -358,6 +363,14 @@ public sealed partial class CompositionDetector
             }
         }
         return -1;
+    }
+
+    /// <summary>末尾の 2 文字以上が、ローマ字として読み切れるか (githubni の ni、ctrlkei の kei。abc・git は読めない)。</summary>
+    private bool EndsWithReadableRomaji(string lower)
+    {
+        for (var start = Math.Max(0, lower.Length - 3); start <= lower.Length - 2; start++)
+            if (_romaji.Analyze(lower[start..]) is { IsValid: true, Partial: "" }) return true;
+        return false;
     }
 
     /// <summary>先頭が辞書の短い英語 (pro) で、残りがまだ英字なのに日本語区間になっている (procrasticle)。</summary>
