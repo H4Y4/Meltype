@@ -4,6 +4,12 @@
 import Cocoa
 import InputMethodKit
 
+if CommandLine.arguments.contains("--version") {
+    let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+    print("Meltype \(version)")
+    exit(0)
+}
+
 if CommandLine.arguments.contains("--register-input-source") {
     exit(InputSourceRegistration.register() == 0 ? 0 : 1)
 }

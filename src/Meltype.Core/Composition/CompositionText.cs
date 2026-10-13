@@ -145,7 +145,10 @@ public sealed class CompositionText
                    // 英単語の最後の l / x (hotel の l) は、次の文字と合わせて小書き文字 (lya = ゃ) にしない。
                    !(last.Raw is "l" or "x" or "L" or "X" && EndsWithEnglishWordFromUnit(_units.Count)) &&
                    // 英単語の最後の t (commit の t) も、続けて打った s と合わせて ts (つ) にしない。
-                   !(last.Raw is "t" or "T" && _pending.Length > 0 && _pending[0] is 's' or 'S' && EndsWithEnglishWordFromUnit(_units.Count)))
+                   !(last.Raw is "t" or "T" && _pending.Length > 0 && _pending[0] is 's' or 'S' && EndsWithEnglishWordFromUnit(_units.Count, tsuFollows: true)) &&
+                   // 英単語全体の最後の子音 (github の b) は、助詞 ya の拗音 (bya = びゃ) に飲み込まれないようにする (githubya → githubや)。
+                   // 接尾辞だけが英単語のとき (kaibuns の buns) は日本語の拗音 (しょ) を優先する。
+                   !(EndsWithWholeEnglishWord(_units.Count) && (c is 'y' or 'Y' || _pending.Length > 0 && _pending[0] is 'y' or 'Y')))
             {
                 pulled.Insert(0, last.Raw);
                 _units.RemoveAt(_units.Count - 1);
@@ -161,10 +164,25 @@ public sealed class CompositionText
             // (commit + suru・site → こっみつる・こっみつぃて ではなく commitする・commitして)。
             // 読めない子音がいくつか残っていても同じ (reflect + sareta の ct + s → reflectされた。refェcつァれた になっていた: issue #77)。
             if (_pending.Length >= 1 && _pending[^1] is 't' or 'T' && c is 's' or 'S' && _pending.ToString().All(char.IsAsciiLetter) &&
-                EndsWithEnglishWordFromUnit(_units.Count, _pending.ToString()))
+                EndsWithEnglishWordFromUnit(_units.Count, _pending.ToString(), tsuFollows: true))
             {
                 foreach (var letter in _pending.ToString()) _units.Add(new CompositionUnit(letter.ToString(), letter.ToString()));
                 _pending.Clear();
+            }
+            // 英単語全体の打ちかけ末尾の子音 (github の b) の次に y が来たら、拗音 (bya = びゃ) にせず子音を英字のまま確定する
+            // (githubya → githubや)。接尾辞だけ英単語の kaibuns + yo (かいぶんしょ) は分けない。
+            if (c is 'y' or 'Y' && _pending.Length > 0 && _pending.ToString().All(char.IsAsciiLetter) &&
+                EndsWithWholeEnglishWord(_units.Count, _pending.ToString()))
+            {
+                foreach (var letter in _pending.ToString()) _units.Add(new CompositionUnit(letter.ToString(), letter.ToString()));
+                _pending.Clear();
+            }
+            // つ にまとめた t + s (shut + s) の後ろが u 以外の母音なら つぁ・つぃ ではないので、英単語の t と s に分け直す (shutした)。
+            if (_pending.Length >= 2 && _pending[^2] is 't' or 'T' && _pending[^1] is 's' or 'S' && c is 'a' or 'i' or 'e' or 'o' or 'A' or 'I' or 'E' or 'O' &&
+                _pending.ToString().All(char.IsAsciiLetter) && EndsWithEnglishWordFromUnit(_units.Count, _pending.ToString()[..^1]))
+            {
+                foreach (var letter in _pending.ToString()[..^1]) _units.Add(new CompositionUnit(letter.ToString(), letter.ToString()));
+                _pending.Remove(0, _pending.Length - 1);
             }
             // z + h/j/k/l で矢印 (macOS の日本語入力と同じ: zh ←、zj ↓、zk ↑、zl →)。
             // 英単語 (puzzle・dazzle の zz の後の l) と、ローマ字として読めなかった英字の後ろ (英単語の途中) は矢印にしない。
@@ -194,8 +212,7 @@ public sealed class CompositionText
         // 記号・数字の前で、途中の n は ん に、読めない子音は英字のまま確定させる。
         Normalize(final: true);
         // 数字の前では打ち間違いを直さない (rta2026・ps5・win11 の英字は略語)。数字の後ろの単位を英字のままにするのは FixTypos の中
-        if (char.IsAsciiDigit(c)) SplitUnitAfterNumber(final: true);
-        else FixTypos();
+        if (!char.IsAsciiDigit(c)) FixTypos();
         // 数字の後の . と , は小数点・桁区切り (GPL3.0、1,000)。句点・読点にしない。
         if (c is ',' or '.' && _units.Count > 0 && _units[^1].Raw is [var previous] && char.IsAsciiDigit(previous))
         {
@@ -340,7 +357,26 @@ public sealed class CompositionText
         i > 0 && _units[i] is { Raw: "u", Kana: "う" } && _units[i - 1] is { Kana: [.., var kana], Raw: [.., var vowel] } &&
         kana is >= 'ぁ' and <= 'ゖ' && vowel is 'o' or 'u';
 
-    private bool EndsWithEnglishWordFromUnit(int count, string extra = "")
+    /// <summary>
+    /// 単位 start から最後の t までを、t + s の つ まで含めて読むと日本語の語かその頭になるか
+    /// (shitsumon の しつ、teishutsu の しゅつ)。前の かな から読んでもよい (ochitsuku の おちつ)。
+    /// </summary>
+    private bool ReadsAsJapaneseWithTsu(int start, int count, string extra)
+    {
+        var last = count;
+        if (extra.Length == 0 && count > start && _units[count - 1].Raw is "t" or "T") last = count - 1;
+        else if (extra is not ("t" or "T")) return false;
+        var kana = "";
+        for (var i = last - 1; i >= 0; i--)
+        {
+            if (!_units[i].Kana.All(c => c is >= 'ぁ' and <= 'ゖ' or 'ー') || _units[i].Raw.Length == 0 || !_units[i].Raw.All(char.IsAsciiLetter)) return false;
+            kana = _units[i].Kana + kana;
+            if (i <= start && kana.Length + 1 >= (i == start ? 2 : 3) && _detector.IsJapaneseWordOrPrefix(kana + "つ")) return true;
+        }
+        return false;
+    }
+
+    private bool EndsWithEnglishWordFromUnit(int count, string extra = "", bool tsuFollows = false)
     {
         var letters = extra;
         for (var i = count - 1; i >= 0 && _units[i].Raw.Length > 0 && _units[i].Raw.All(char.IsAsciiLetter); i--)
@@ -350,9 +386,23 @@ public sealed class CompositionText
             if (i > 0 && char.IsAsciiLetterUpper(_units[i].Raw[0]) && _units[i - 1].Raw is [.., var before] && char.IsAsciiLetterUpper(before)) continue;
             // 伸ばす音の う (そう・きょう・ほんとう の u) から始まる語 (unit) は見ない (sounitsuite の t と s を つ にまとめるように)
             if (IsLongVowelU(i)) continue;
+            // 続けて打った s と合わせた つ まで読むと日本語の語 (shitsumon の shit) なら、英単語として見ない
+            if (tsuFollows && ReadsAsJapaneseWithTsu(i, count, extra)) continue;
             if (letters.Length >= 4 && _detector.IsKnownEnglishWord(letters)) return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// 末尾の英字の並び全体が、同梱辞書の英単語か (接尾辞だけの一致・スペルチェッカーは含めない)。
+    /// github + ya は分けるが、kaibuns + yo (かいぶんしょ。buns だけ英単語 / Windows のスペルが kaibuns と言う) は分けない。
+    /// </summary>
+    private bool EndsWithWholeEnglishWord(int count, string extra = "")
+    {
+        var letters = extra;
+        for (var i = count - 1; i >= 0 && _units[i].Raw.Length > 0 && _units[i].Raw.All(char.IsAsciiLetter); i--)
+            letters = _units[i].Raw + letters;
+        return letters.Length >= 4 && _detector.IsListedEnglishWord(letters.ToLowerInvariant());
     }
 
     /// <summary>
@@ -1247,8 +1297,8 @@ public sealed class CompositionText
         return new string(chars);
     }
 
-    /// <summary>z + 記号 (Microsoft IME と同じ): z/ → ・、z. → …、z, → ‥、z- → ～、z[ → 『、z] → 』。</summary>
-    private static char? ZSymbol(char c) => c switch
+    /// <summary>z + 記号 (Microsoft IME と同じ): z/ → ・、z. → …、z, → ‥、z- → ～、z[ → 『、z] → 』。zh zj zk zl → ← ↓ ↑ →。</summary>
+    private static char? ZSymbol(char c) => char.ToLowerInvariant(c) switch
     {
         '/' => '・',
         '.' => '…',
@@ -1256,6 +1306,10 @@ public sealed class CompositionText
         '-' => '～',
         '[' => '『',
         ']' => '』',
+        'h' => '←',
+        'j' => '↓',
+        'k' => '↑',
+        'l' => '→',
         _ => null,
     };
 

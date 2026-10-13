@@ -6,18 +6,57 @@
 # Windows 版と共通の C# の部分を NativeAOT にしたもの) に渡し、返ってきた結果 (確定する文字・変換中の文字・候補) を
 # 入力欄に出す。漢字変換は Mozc の変換ヘルパー (meltype_mozc_helper) を本体が呼ぶ。
 #   ibus-engine-meltype --ibus   IBus から起動されるとき (コンポーネントの <exec>)
-import ctypes
+#   ibus-engine-meltype --version  版だけを出して終わる
 import json
 import os
+import re
 import subprocess
 import sys
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+
+
+def _version_from_xml():
+    path = os.path.join(HERE, "meltype.xml")
+    try:
+        with open(path, encoding="utf-8") as f:
+            match = re.search(r"<version>([^<]+)</version>", f.read())
+        return match.group(1).strip() if match else None
+    except OSError:
+        return None
+
+
+def _version_from_native():
+    so = os.path.join(HERE, "libMeltypeNative.so")
+    if not os.path.isfile(so):
+        return None
+    import ctypes
+
+    try:
+        lib = ctypes.CDLL(so)
+        lib.meltype_version.restype = ctypes.c_void_p
+        lib.meltype_free.argtypes = [ctypes.c_void_p]
+        pointer = lib.meltype_version()
+        if not pointer:
+            return None
+        try:
+            return ctypes.string_at(pointer).decode("utf-8")
+        finally:
+            lib.meltype_free(pointer)
+    except Exception:
+        return None
+
+
+if "--version" in sys.argv[1:]:
+    print(f"Meltype {_version_from_native() or _version_from_xml() or '?'}")
+    raise SystemExit(0)
+
+import ctypes
 
 import gi
 
 gi.require_version("IBus", "1.0")
 from gi.repository import GLib, GObject, IBus  # noqa: E402
-
-HERE = os.path.dirname(os.path.realpath(__file__))
 
 # ---- 本体 (libMeltypeNative.so) ----
 

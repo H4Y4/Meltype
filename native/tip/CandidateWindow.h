@@ -19,11 +19,13 @@ struct CandidateView {
     int selected = -1;
     std::wstring suggestion;  // もしかして (無ければ空)
     std::wstring meaning;     // 選んでいる候補の意味 (無ければ空)
+    bool prediction = false;  // candidates が予測変換の候補か (番号を出さない。クリックすると確定する)
 };
 
 class CandidateWindow {
 public:
-    using SelectHandler = std::function<void(int index)>;
+    // prediction は、予測変換の候補をクリックしたか
+    using SelectHandler = std::function<void(int index, bool prediction)>;
 
     explicit CandidateWindow(SelectHandler onSelect);
     ~CandidateWindow();
@@ -37,6 +39,8 @@ public:
 
     static void RegisterClasses();
     static void UnregisterClasses();
+    // DllCanUnloadNow で S_OK を返すときに呼ぶ。DllMain からは呼ばない
+    static void ReleaseFactories();
 
     struct Impl;
 

@@ -318,11 +318,13 @@ struct EventTests {
    type(controller,client,"ka"); equal(client.document,"あいうえおka"); equal(client.marked,"")
   }
   check("Mac style Ctrl+: (JIS, no Shift) is half-width alphanumerics and stays Japanese") { controller,client in
-   type(controller,client,"aiueo")
-   precondition(ctrl(controller,client,"'",":",code:kVK_ANSI_Quote),"Ctrl+: (JIS) must be consumed"); equal(client.marked,"aiueo")
+   // (ほかの確認と違う語を使う: 英字のまま確定すると英語として覚え、学習データはプロセスで共有するので、後ろの確認の あいうえお まで英字になる)
+   type(controller,client,"sasiso")
+   precondition(ctrl(controller,client,"'",":",code:kVK_ANSI_Quote),"Ctrl+: (JIS) must be consumed"); equal(client.marked,"sasiso")
    equal(client.document,"")
-   // 英数に切り替わっていないので、続けて打った文字は変換中の文字に入る (アプリへは直接入らない)
-   type(controller,client,"ka"); equal(client.document,"")
+   // 英数に切り替わっていないので、続けて打った文字は変換中の文字に入る (アプリへは直接入らない)。
+   // 英字にしたあとに続けて打つと、見えているとおりに確定して新しい入力を始める (本家 #490)
+   type(controller,client,"ka"); equal(client.document,"sasiso"); equal(client.marked,"か")
   }
   check("Mac style Ctrl+N / Ctrl+F in an English word pass to the app") { controller,client in
    type(controller,client,"hello")
