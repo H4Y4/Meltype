@@ -28,10 +28,15 @@ if CommandLine.arguments.contains("--self-test") || CommandLine.arguments.contai
         print("\(condition ? "PASS" : "FAIL") \(name)")
         if !condition { failures += 1 }
     }
-    func type(_ text: String, session: UnsafeMutableRawPointer?, before: String? = nil) -> (String, SessionResult?) {
+    /// field を渡すと、実際の入力欄と同じように前後の文字を本体へ渡す: 変換中の文字が無いキーのときだけ、
+    /// キャレットの前の文字 (field.before + ここまでに確定した文字) と後ろの文字 (field.after) を渡す (InputController.handle と同じ)。
+    func type(_ text: String, session: UnsafeMutableRawPointer?, before: String? = nil, field: (before: String, after: String)? = nil) -> (String, SessionResult?) {
         var output = ""
         var last: SessionResult?
         for character in text {
+            var before = before
+            var after: String?
+            if let field, last?.view == nil { (before, after) = (field.before + output, field.after) }
             let vk: Int32
             switch character {
             case " ": vk = 0x20
@@ -41,7 +46,7 @@ if CommandLine.arguments.contains("--self-test") || CommandLine.arguments.contai
             }
             let code = Int32(String(character).utf16.first ?? 0)
             last = NativeCore.shared.handleKey(session, vk: vk, character: code,
-                modifiers: character.isUppercase ? 1 : 0, before: before, after: nil)
+                modifiers: character.isUppercase ? 1 : 0, before: before, after: after)
             for edit in last?.commits ?? [] {
                 if edit.deleteBefore > 0 {
                     let current = output as NSString
@@ -58,10 +63,13 @@ if CommandLine.arguments.contains("--self-test") || CommandLine.arguments.contai
             let content = try String(contentsOfFile: CommandLine.arguments[index + 1], encoding: .utf8)
             var count = 0
             for line in content.split(separator: "\n") where !line.hasPrefix("#") {
-                let parts = line.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
-                guard parts.count == 2 else { continue }
+                // 入力<TAB>期待する出力[<TAB>入力欄のキャレットの前の文字[<TAB>後ろの文字]]。前後の文字の中の \\n は改行。
+                let parts = line.split(separator: "\t", maxSplits: 3, omittingEmptySubsequences: false)
+                guard parts.count >= 2 else { continue }
+                let text = { (index: Int) in parts.count > index ? parts[index].replacingOccurrences(of: "\\n", with: "\n") : "" }
+                let field = parts.count > 2 ? (before: text(2), after: text(3)) : nil
                 let session = NativeCore.shared.createSession()
-                let (output, _) = type(String(parts[0]) + "\n", session: session)
+                let (output, _) = type(String(parts[0]) + "\n", session: session, field: field)
                 NativeCore.shared.destroySession(session)
                 check(String(parts[0]), output == String(parts[1]))
                 if output != String(parts[1]) { print("expected: \(parts[1]); actual: \(output)") }

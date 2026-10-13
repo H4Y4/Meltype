@@ -22,13 +22,22 @@ public interface IKanjiConverter
 }
 
 /// <summary>
-/// 文脈を読んで変換するニューラルの変換エンジン (Mac 版の azooKey の Zenzai)。次の 2 点が変わる:
+/// 文脈を読んで変換するニューラルの変換エンジン (Mac 版の azooKey の Zenzai)。次の点が変わる:
 ///   1. 文脈には、キャレットの前の文字に加えて、同じ入力の中で前にある区間 (meltype + のへんかんせいど の meltype) も渡す。
 ///      前の文字が英語でも渡す (API + のしよう → の仕様)。
 ///   2. 文脈付きの結果をそのまま使い、区切りを見比べるための文脈なしの変換をしない
 ///      (文脈で区切りが崩れにくく、打つたびに 2 回変換すると遅い)。
+///   3. 変換する読みのすぐ後ろに続く文字も渡す (かいとう + した冷凍食品 → 解凍、きどうを + debug → 起動を)。
 /// </summary>
-public interface IContextAwareConverter;
+public interface IContextAwareConverter
+{
+    /// <summary>
+    /// 前後の文脈つきで、文節に区切って変換する。区切れなければ null。
+    /// following は、変換する読みのすぐ後ろに続く文字: 入力欄の確定済みの文字か、同じ入力の中の英単語。
+    /// 変換前のかなは渡さない (変換エンジンがかなに引きずられて、結果までかなになる)。
+    /// </summary>
+    IReadOnlyList<ConversionClause>? ConvertClauses(string hiragana, string? context, string? following);
+}
 
 /// <summary>確定した変換を覚えられる変換エンジン (Mozc)。次から同じ読みで同じ文字列を先に出す。</summary>
 public interface ILearningConverter

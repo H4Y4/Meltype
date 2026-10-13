@@ -3680,11 +3680,86 @@ internal static class CompositionTests
             return Script.TryGetValue(hiragana, out var clauses) ? string.Concat(clauses.Select(c => c.Text)) : _inner.Convert(hiragana);
         }
 
-        public IReadOnlyList<ConversionClause>? ConvertClauses(string hiragana, string? context = null)
+        public IReadOnlyList<ConversionClause>? ConvertClauses(string hiragana, string? context = null) => ConvertClauses(hiragana, context, null);
+
+        /// <summary>かな → 渡された後ろの文脈 (最後に渡されたもの)。</summary>
+        public Dictionary<string, string?> Following { get; } = [];
+
+        public IReadOnlyList<ConversionClause>? ConvertClauses(string hiragana, string? context, string? following)
         {
             Contexts.Add((hiragana, context));
+            Following[hiragana] = following;
             return Script.TryGetValue(hiragana, out var clauses) ? clauses : _inner.ConvertClauses(hiragana, context);
         }
+    }
+
+    [Test]
+    public static void NeuralConverter_UsesFieldTextRightAfterOwnCommit()
+    {
+        // 確定した直後 (1.5 秒以内) は自分の記録 (最後の 20 文字) を文脈に使う。入力欄の文字がいつも最新で (Mac)、
+        // 確定した文字まで進んでいるなら、入力欄から読んだ長い方を使う。
+        (bool Current, string Field, string Expected, string Why)[] cases =
+        [
+            (true, "これは二十文字を超える長さの前の文です。熱い", "これは二十文字を超える長さの前の文です。熱い", "入力欄が確定した文字まで進んでいれば、入力欄の文字"),
+            (true, "これは二十文字を超える長さの前の文です。", "熱い", "入力欄がまだ進んでいなければ、自分の記録"),
+            (false, "これは二十文字を超える長さの前の文です。熱い", "熱い", "入力欄の文字が最新とは限らない環境 (Windows のフック) では、自分の記録"),
+        ];
+        foreach (var (current, field, expected, why) in cases)
+        {
+            var converter = new AwareConverter();
+            var k = new Keyboard(converter: converter, moreCandidates: _ => []);
+            k.Host.SurroundingTextIsCurrent = current;
+            k.Type("atsui \n");
+            Assert.Equal("熱い", k.Host.Document, "確定");
+            converter.Contexts.Clear();
+            k.Host.PrecedingText = field;
+            k.Type("samui ");
+            Assert.True(converter.Contexts.Count > 0 && converter.Contexts.All(c => c.Context == expected),
+                why + ": " + string.Join(" / ", converter.Contexts.Select(c => c.Context)));
+        }
+    }
+
+    [Test]
+    public static void NeuralConverter_GetsFollowingText()
+    {
+        // 変換する読みのすぐ後ろに続く文字も、変換エンジンに渡す (かいとう + した冷凍食品 → 解凍)。
+        // 入力欄のキャレットの後ろの確定済みの文字: 行の終わりまで、最大 20 文字
+        var converter = new AwareConverter();
+        var k = new Keyboard(converter: converter, moreCandidates: _ => []);
+        k.Host.FollowingText = "した冷凍食品を食べる。次の文もここまでは渡す\n次の行は渡さない";
+        k.Type("atsui ");
+        Assert.Equal("した冷凍食品を食べる。次の文もここまでは", converter.Following["あつい"], "キャレットの後ろの文字を 20 文字まで渡す");
+
+        converter = new AwareConverter();
+        k = new Keyboard(converter: converter, moreCandidates: _ => []);
+        k.Host.FollowingText = "\n次の行";
+        k.Type("atsui ");
+        Assert.True(converter.Following["あつい"] is null, "行の終わりにいるときは、次の行を渡さない");
+
+        // 同じ入力の中で後ろに続く英単語 (きどうを + debug → 起動を)。その後ろの日本語 (する) と、入力欄の文字は続けない
+        foreach (var live in new[] { false, true })
+        {
+            converter = new AwareConverter();
+            converter.Script["あついを"] = [new("あついを", "熱いを")];
+            k = new Keyboard(live: live, converter: converter, moreCandidates: _ => []);
+            k.Host.FollowingText = "の後ろ";
+            k.Type("atsuiwodebugsuru" + (live ? "" : " "));
+            Assert.Equal("debug", converter.Following["あついを"], $"後ろの英単語を渡す (live={live})");
+            Assert.Equal("の後ろ", converter.Following["する"], $"最後のかなには、入力欄のキャレットの後ろの文字を渡す (live={live})");
+        }
+        // 後ろが日本語のかな (変換前) なら渡さない: 記号で分かれた前のかな
+        converter = new AwareConverter();
+        k = new Keyboard(converter: converter, moreCandidates: _ => []);
+        k.Host.FollowingText = "の後ろ";
+        k.Type("atsui(samui ");
+        Assert.True(converter.Following["あつい"] is null, "後ろが変換前のかななら渡さない");
+        Assert.Equal("の後ろ", converter.Following["さむい"], "記号の後ろの最後のかなには、入力欄の文字を渡す");
+
+        // 文脈を見ない変換エンジンは今までどおり (後ろの文脈という考えが無い)
+        var plain = new Keyboard();
+        plain.Host.FollowingText = "の後ろ";
+        plain.Type("atsui ");
+        Assert.Equal("熱い", string.Concat(plain.Host.View!.Clauses!), "文脈を見ない変換エンジンの結果は変わらない");
     }
 
     [Test]

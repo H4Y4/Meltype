@@ -57,7 +57,7 @@ final class EventClient: NSObject, IMKTextInput {
 #if !REAL_CONVERTER
 final class MeltypeConverter {
  static let shared=MeltypeConverter()
- func clauses(for text:String,context:String?)->[(reading:String,text:String)] {text=="つくえ" ? [(reading:text,text:"机")] : []}
+ func clauses(for text:String,context:String?,following:String?=nil)->[(reading:String,text:String)] {text=="つくえ" ? [(reading:text,text:"机")] : []}
  // ページ送りのテスト用に、つくえ だけ 30 個の候補を返す (他の読みは今までどおり空)。
  func candidates(for text:String)->[String] {text=="つくえ" ? (1...30).map {"候補\($0)"} : []}
 }
@@ -526,6 +526,11 @@ struct EventTests {
    let contextual=converter.clauses(for:"のせいどがひくい",context:"このIME").map(\.text).joined()
    precondition(contextual=="の精度が低い","neural left context: \(contextual)")
    precondition(converter.candidates(for:"へんかん").contains("返還"),"candidate list lost alternatives")
+   // The text right after the reading decides homophones that the left context cannot (かいとう + した冷凍食品 → 解凍).
+   let thawed=converter.clauses(for:"かいとう",context:nil,following:"した冷凍食品を食べる").map(\.text).joined()
+   precondition(thawed=="解凍","neural right context: \(thawed)")
+   let answered=converter.clauses(for:"かいとう",context:nil,following:"用紙に名前を書く").map(\.text).joined()
+   precondition(answered != "解凍","right context must not be ignored or cached across requests: \(answered)")
    // Regression: the candidate list for the reading just converted by the neural engine crashed the IME
    // (azooKey reused the previous lattice: にゅうりょく / しゅうせい + Space). It trapped, so reaching the end is the check.
    for reading in ["にゅうりょく","しゅうせい","へんかん","きのう"] {
@@ -534,8 +539,8 @@ struct EventTests {
     _=converter.clauses(for:reading,context:"この")
     precondition(!converter.candidates(for:reading).isEmpty,"candidate list after contextual conversion: \(reading)")
    }
-   passed+=5
-   print("PASS: neural conversion (segmentation, homophones, left context, candidate list, candidate list after the same reading)")
+   passed+=6
+   print("PASS: neural conversion (segmentation, homophones, left context, right context, candidate list, candidate list after the same reading)")
   } else {
    print("NOT_RUN: neural conversion (no model in mac/.build/zenz)")
   }

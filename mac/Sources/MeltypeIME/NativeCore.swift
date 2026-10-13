@@ -5,7 +5,7 @@ import AppKit
 import Foundation
 
 // libMeltypeNative.dylib (C# の Meltype.Core を NativeAOT にしたもの) の関数。src/Meltype.Mac.Native/Exports.cs と合わせる。
-typealias ClausesCallback = @convention(c) (UnsafePointer<CChar>?, UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>?
+typealias ClausesCallback = @convention(c) (UnsafePointer<CChar>?, UnsafePointer<CChar>?, UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>?
 typealias CandidatesCallback = @convention(c) (UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>?
 typealias IsWordCallback = @convention(c) (UnsafePointer<CChar>?) -> Int32
 
@@ -24,10 +24,11 @@ private typealias FreeFunction = @convention(c) (UnsafeMutableRawPointer?) -> Vo
 
 // ---- 本体から呼ばれる関数 (文字列は strdup したものを返し、本体が free する) ----
 
-/// (ひらがな, 文脈) → 「読み\t変換結果」を改行でつないだもの (文節ごと)。
-private let clausesCallback: ClausesCallback = { hiragana, context in
+/// (ひらがな, 前の文脈, 後ろの文脈) → 「読み\t変換結果」を改行でつないだもの (文節ごと)。
+private let clausesCallback: ClausesCallback = { hiragana, context, following in
     guard let hiragana else { return nil }
-    let clauses = MeltypeConverter.shared.clauses(for: String(cString: hiragana), context: context.map { String(cString: $0) })
+    let clauses = MeltypeConverter.shared.clauses(for: String(cString: hiragana), context: context.map { String(cString: $0) },
+                                                  following: following.map { String(cString: $0) })
     guard !clauses.isEmpty else { return nil }
     return strdup(clauses.map { "\($0.reading)\t\($0.text)" }.joined(separator: "\n"))
 }

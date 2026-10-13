@@ -957,6 +957,15 @@ public sealed class CompositionText
     /// </summary>
     public string RenderedBefore { get; private set; } = "";
 
+    /// <summary>
+    /// <see cref="RenderSegments"/> が convert を呼んでいる間だけ: その区間のすぐ後ろに続く英語の区間の文字 (きどうを + debug なら debug)。
+    /// 次の日本語の区間の手前まで (変換前のかなは、変換エンジンに文脈として渡すと害になる)。
+    /// </summary>
+    public string RenderedAfter { get; private set; } = "";
+
+    /// <summary><see cref="RenderSegments"/> が convert を呼んでいる間だけ: その区間の後ろに日本語の区間が無いか (無ければ、入力欄のキャレットの後ろの文字が続く)。</summary>
+    public bool RenderedAfterReachesEnd { get; private set; } = true;
+
     /// <summary>英語区間は英字のまま、日本語区間はかな (または漢字)。保護範囲は打った原文のまま。</summary>
     public string RenderSegments(bool final, Func<string, string>? convert)
     {
@@ -983,13 +992,27 @@ public sealed class CompositionText
             if (convert is not null && kana.Length > 0)
             {
                 RenderedBefore = builder.ToString();
+                (RenderedAfter, RenderedAfterReachesEnd) = EnglishAfter(segments, i);
                 builder.Append(convert(kana));
                 RenderedBefore = "";
+                (RenderedAfter, RenderedAfterReachesEnd) = ("", true);
             }
             else builder.Append(kana);
             builder.Append(pending);
         }
         return builder.ToString();
+    }
+
+    /// <summary>index の区間のすぐ後ろに続く英語の区間の文字 (次の日本語の区間の手前まで) と、後ろに日本語の区間が無いか。</summary>
+    public static (string Text, bool ReachesEnd) EnglishAfter(IReadOnlyList<CompositionSegment> segments, int index)
+    {
+        var after = new StringBuilder();
+        for (var k = index + 1; k < segments.Count; k++)
+        {
+            if (!segments[k].IsEnglish) return (after.ToString(), false);
+            after.Append(segments[k].Raw);
+        }
+        return (after.ToString(), true);
     }
 
     /// <summary>英語判定を無視してすべてかなにしたもの (F6)。</summary>

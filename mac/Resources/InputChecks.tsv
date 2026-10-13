@@ -43,3 +43,9 @@ https://example.com	https://example.com
 alice@example.com	alice@example.com
 getUserName	getUserName
 kyouhagoogledekensakuwo,sitaitoomoimasu.seeyouagain	今日はgoogleで検索を、したいと思います。see you again
+# 入力欄の前後の文字を文脈に使う (3 列目 = キャレットの前の文字、4 列目 = 後ろの文字)
+kidougaosoi	起動が遅い	アプリを入れ直した。	
+kaitou	解凍		した冷凍食品を食べる
+kaitou	解答		用紙に名前を書く
+# 同じ入力の中で後ろに続く英単語も文脈に使う
+kidouwodebugsuru	起動をdebugする

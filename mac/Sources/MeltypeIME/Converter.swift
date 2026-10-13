@@ -22,6 +22,9 @@ final class MeltypeConverter {
     private let directory: URL
     /// ニューラル変換 (Zenzai) のモデル。同梱していない・設定で止めているときは nil (辞書と統計だけで変換する)。
     private let zenzaiWeight: URL?
+    /// 後ろの文脈 (変換する読みのすぐ後ろに続く文字) を渡すか。後ろの文脈を読めるのは zenz-v3.2 から。
+    /// それより前のモデルに渡すと悪化する (AJIMEE-Bench を前後に分けた 70 件: v3.2 は 65 → 67 件、v3.1 は 57 件)。
+    private let passesFollowing: Bool
     private var resultCache: [String: [Candidate]] = [:]
     private var cacheOrder: [String] = []
 
@@ -61,16 +64,17 @@ final class MeltypeConverter {
             .appendingPathComponent("azooKey", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         zenzaiWeight = MeltypeConverter.bundledZenzaiWeight()
+        passesFollowing = zenzaiWeight?.lastPathComponent.hasPrefix("zenz-v3.2") == true
         NSLog("Meltype: ニューラル変換 (Zenzai) %@", zenzaiWeight.map { "を使います: \($0.lastPathComponent)" } ?? "は使いません")
     }
 
     /// 変換の設定。context を渡すと、ニューラル変換がキャレットの前の文字を文脈として使う (この本は + あつい → 厚い)。
     /// neural が false なら、辞書と統計だけで変換する (候補の一覧用: 速く、候補の種類が多い)。
-    private func options(neural: Bool, context: String?) -> ConvertRequestOptions {
+    private func options(neural: Bool, context: String?, following: String? = nil) -> ConvertRequestOptions {
         var zenzai = ConvertRequestOptions.ZenzaiMode.off
         if neural, let zenzaiWeight {
             zenzai = .on(weight: zenzaiWeight, inferenceLimit: MeltypeConverter.zenzaiInferenceLimit, personalizationMode: nil,
-                         versionDependentMode: .v3(.init(leftSideContext: context)))
+                         versionDependentMode: .v3(.init(leftSideContext: context, rightSideContext: passesFollowing ? following : nil)))
         }
         return ConvertRequestOptions(
             requireJapanesePrediction: .disabled,
@@ -87,16 +91,17 @@ final class MeltypeConverter {
     }
 
     /// ひらがな全体に対する変換結果 (入力をすべて使ったものだけ、よい順)。
-    private func results(for hiragana: String, neural: Bool, context: String? = nil) -> [Candidate] {
+    private func results(for hiragana: String, neural: Bool, context: String? = nil, following: String? = nil) -> [Candidate] {
         // ニューラル変換を使わないときは、文脈で結果が変わらない。
         let neural = neural && zenzaiWeight != nil
-        let key = neural ? "n\u{1}\(context ?? "")\u{1}\(hiragana)" : "c\u{1}\(hiragana)"
+        let following = passesFollowing ? following : nil
+        let key = neural ? "n\u{1}\(context ?? "")\u{1}\(following ?? "")\u{1}\(hiragana)" : "c\u{1}\(hiragana)"
         if let cached = resultCache[key] { return cached }
         var composing = ComposingText()
         composing.insertAtCursorPosition(hiragana, inputStyle: .direct)
         // ニューラル変換を使う構成では、converter にはニューラル変換だけを、listConverter には辞書と統計だけの変換を流す。
         let engine = neural || zenzaiWeight == nil ? converter : listConverter
-        let results = engine.requestCandidates(composing, options: options(neural: neural, context: context))
+        let results = engine.requestCandidates(composing, options: options(neural: neural, context: context, following: following))
         let count = hiragana.count
         // 入力 (ひらがな) をすべて使った候補だけ (.direct で入れたので、入力の文字数 = ひらがなの文字数)
         let candidates = results.mainResults.filter { $0.composingCount == .inputCount(count) || $0.composingCount == .surfaceCount(count) }
@@ -123,8 +128,9 @@ final class MeltypeConverter {
     }
 
     /// 文節に区切った変換結果 (読みをつなげると元のひらがなになる)。変換できなければ空。
-    func clauses(for hiragana: String, context: String?) -> [(reading: String, text: String)] {
-        guard let best = results(for: hiragana, neural: true, context: context).first else { return [] }
+    /// context はキャレットの前の文字、following は読みのすぐ後ろに続く文字 (確定済みの文字か英単語。変換前のかなは来ない)。
+    func clauses(for hiragana: String, context: String?, following: String? = nil) -> [(reading: String, text: String)] {
+        guard let best = results(for: hiragana, neural: true, context: context, following: following).first else { return [] }
         var clauses: [(reading: String, text: String)] = []
         for element in best.data {
             let reading = MeltypeConverter.hiragana(element.ruby)
