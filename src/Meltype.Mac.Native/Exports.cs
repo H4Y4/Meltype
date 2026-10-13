@@ -189,6 +189,11 @@ public static unsafe class Exports
         if (handle != IntPtr.Zero && GCHandle.FromIntPtr(handle).Target is MeltypeSession session) session.CanDeleteSurrounding = canDelete != 0;
     }
 
+    /// <summary>設定「英字のレイアウト」(config.json の LatinKeyboardLayout。指定が無ければ空文字)。meltype_free で解放する。</summary>
+    [UnmanagedCallersOnly(EntryPoint = "meltype_latin_keyboard_layout")]
+    public static byte* LatinKeyboardLayout(IntPtr handle) =>
+        ToUtf8(handle != IntPtr.Zero && GCHandle.FromIntPtr(handle).Target is MeltypeSession session ? session.LatinKeyboardLayout : "");
+
     /// <summary>データの保存場所 (設定・学習・ユーザー辞書)。meltype_free で解放する。</summary>
     [UnmanagedCallersOnly(EntryPoint = "meltype_data_directory")]
     public static byte* DataDirectory() => ToUtf8(Config.AppPaths.DataDirectory);

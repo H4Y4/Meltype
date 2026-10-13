@@ -43,7 +43,8 @@ final class EventClient: NSObject, IMKTextInput {
  func characterIndex(for point:NSPoint, tracking mode:IMKLocationToOffsetMappingMode, inMarkedRange:UnsafeMutablePointer<ObjCBool>!)->Int {inMarkedRange?.pointee=false; return 0}
  func attributes(forCharacterIndex index:Int, lineHeightRectangle rectangle:UnsafeMutablePointer<NSRect>!)->[AnyHashable:Any]! {rectangle?.pointee=NSRect(x:0,y:0,width:1,height:20); return [:]}
  func validAttributesForMarkedText()->[Any]! {[]}
- func overrideKeyboard(withKeyboardNamed name:String!) {}
+ var overriddenKeyboards:[String]=[]
+ func overrideKeyboard(withKeyboardNamed name:String!) {overriddenKeyboards.append(name)}
  func selectMode(_ identifier:String!) {}
  func supportsUnicode()->Bool {true}
  func bundleIdentifier()->String! {"local.meltype.event-client"}
@@ -262,6 +263,58 @@ struct EventTests {
    var object=(originalConfig.flatMap { try? JSONSerialization.jsonObject(with:$0) } as? [String:Any]) ?? [:]
    if let style { object["ControlKeys"]=style }
    try! JSONSerialization.data(withJSONObject:object).write(to:configURL)
+  }
+  // 英字のレイアウト (設定 LatinKeyboardLayout)。入力欄を選んだとき (activateServer) に、指定した配列でキーを文字にしてもらう。
+  func writeSetting(_ key:String,_ value:Any?) {
+   var object=(originalConfig.flatMap { try? JSONSerialization.jsonObject(with:$0) } as? [String:Any]) ?? [:]
+   if let value { object[key]=value }
+   try! JSONSerialization.data(withJSONObject:object).write(to:configURL)
+  }
+  func writeLatinKeyboardLayout(_ layout:String?) { writeSetting("LatinKeyboardLayout",layout) }
+  // 括弧 (設定 FullWidthParentheses) と ¥ キー (設定 YenKey)。JIS 配列の ¥ キーは characters が "¥" (U+00A5) で届く。
+  writeSetting("FullWidthParentheses",nil)
+  check("parentheses stay half-width without a setting") { controller,client in
+   type(controller,client,"kore(are)")
+   equal(client.marked,"これ(あれ)")
+  }
+  check("yen key passes through without a setting") { controller,client in
+   precondition(!key(controller,client,"¥",code:UInt16(kVK_JIS_Yen)),"the yen key must pass to the app")
+   equal(client.document,"¥"); equal(client.marked,"")
+  }
+  writeSetting("FullWidthParentheses",true)
+  check("FullWidthParentheses makes parentheses full-width") { controller,client in
+   type(controller,client,"kore(are)")
+   equal(client.marked,"これ（あれ）")
+  }
+  writeSetting("YenKey","Backslash")
+  check("YenKey Backslash turns the yen key into a backslash in the composition") { controller,client in
+   type(controller,client,"kore")
+   precondition(key(controller,client,"¥",code:UInt16(kVK_JIS_Yen)),"the yen key must be handled by the IME")
+   equal(client.marked,"これ\\"); equal(client.document,"")
+  }
+  check("YenKey Backslash inserts a backslash in direct input") { controller,client in
+   precondition(key(controller,client,"",code:UInt16(kVK_JIS_Eisu)),"Eisu switches to direct input")
+   precondition(key(controller,client,"¥",code:UInt16(kVK_JIS_Yen)),"the yen key must not pass to the app")
+   equal(client.document,"\\"); equal(client.marked,"")
+  }
+  check("YenKey Backslash leaves Option+yen alone") { controller,client in
+   precondition(!key(controller,client,"\\",code:UInt16(kVK_JIS_Yen),flags:[.option]),"Option+yen must pass to the app")
+   equal(client.document,"\\"); equal(client.marked,"")
+  }
+  writeLatinKeyboardLayout(nil)
+  check("no Latin keyboard layout setting leaves the keyboard alone") { controller,client in
+   controller.activateServer(client)
+   precondition(client.overriddenKeyboards.isEmpty,"no override without a setting")
+  }
+  writeLatinKeyboardLayout("com.apple.keylayout.US")
+  check("Latin keyboard layout setting overrides the keyboard on activation") { controller,client in
+   controller.activateServer(client)
+   precondition(client.overriddenKeyboards==["com.apple.keylayout.US"],"override with the configured layout: \(client.overriddenKeyboards)")
+  }
+  writeLatinKeyboardLayout("com.example.keylayout.Missing")
+  check("unknown Latin keyboard layout is ignored") { controller,client in
+   controller.activateServer(client)
+   precondition(client.overriddenKeyboards.isEmpty,"no override with a layout that is not installed")
   }
   writeControlKeys(nil)
   check("Ctrl+J without a setting is not assigned (ATOK style)") { controller,client in

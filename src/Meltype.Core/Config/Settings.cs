@@ -303,6 +303,15 @@ public sealed class Settings
      Description("¥ キーと \\ キーで入れる文字です (Mac の日本語入力の「\"¥\" キーで入力する文字」と同じ)。「¥ (円記号)」は今までどおりで、日本語の中で打った \\ は全角の ￥ になります。「\\ (バックスラッシュ)」にすると、どちらのキーも半角の \\ を入れます (Mac の JIS 配列の ¥ キーも \\ になり、英数 (直接入力) のときにも効きます)。Windows の ¥ キーはもともと \\ の文字なので、変わるのは日本語の中で全角の ￥ にしなくなる点だけです。")]
     public YenKeyStyle YenKey { get; set; } = YenKeyStyle.Yen;
 
+    /// <summary>
+    /// Mac 版だけ: キーを文字にするのに使う英字のキーボード配列 (macOS の日本語入力の「英字のレイアウト」と同じ)。
+    /// macOS の入力ソースの ID を書く (com.apple.keylayout.ABC、com.apple.keylayout.US、com.apple.keylayout.Dvorak など)。
+    /// 空なら指定せず、今までどおり macOS が最後に使った英字の配列になる。Mac に入っていない名前は無視する。
+    /// Windows・Linux では使わないので、設定画面には出さない。
+    /// </summary>
+    [Browsable(false)]
+    public string LatinKeyboardLayout { get; set; } = "";
+
     [Category("1. 全般"), DisplayName("入力モードをカーソルの近くに表示"),
      Description("入力欄をクリックしたときと 半角/全角 を押したときに、カーソルの近くに「あ」(日本語) か「A」(英数) を一瞬表示します。Meltype キーボードの使用中は Windows の IME を OFF にしているので、タスクバーの IME の表示は常に「A」になります。今のモードはこの表示かトレイの Meltype のアイコンで確認してください。")]
     public bool ShowModeIndicator { get; set; } = true;
@@ -808,6 +817,7 @@ public sealed class Settings
         SessionIdleMs = Math.Clamp(SessionIdleMs, 300, 60000);
         FeedbackWindowMs = Math.Clamp(FeedbackWindowMs, 500, 30000);
         ImeTimeoutMs = Math.Clamp(ImeTimeoutMs, 50, 2000);
+        LatinKeyboardLayout = (LatinKeyboardLayout ?? "").Trim();
         AppRules ??= [];
         AppKinds ??= [];
         AppRules.RemoveAll(r => r is null || string.IsNullOrWhiteSpace(r.Process));

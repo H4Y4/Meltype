@@ -18,6 +18,7 @@ private typealias SelectFunction = @convention(c) (UnsafeMutableRawPointer?, Int
 private typealias ReconvertFunction = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?, UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>?
 private typealias SetDirectFunction = @convention(c) (UnsafeMutableRawPointer?, Int32) -> Void
 private typealias DataDirectoryFunction = @convention(c) () -> UnsafeMutablePointer<CChar>?
+private typealias SessionStringFunction = @convention(c) (UnsafeMutableRawPointer?) -> UnsafeMutablePointer<CChar>?
 private typealias ReportUrlFunction = @convention(c) (UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>?
 private typealias FreeFunction = @convention(c) (UnsafeMutableRawPointer?) -> Void
 
@@ -107,6 +108,7 @@ final class NativeCore {
     private let reconvertFunction: ReconvertFunction?
     private let setDirectFunction: SetDirectFunction?
     private let setCodeInputFunction: SetDirectFunction?
+    private let latinKeyboardLayoutFunction: SessionStringFunction?
     private let dataDirectoryFunction: DataDirectoryFunction?
     private let reportUrlFunction: ReportUrlFunction?
     private let freeFunction: FreeFunction?
@@ -132,6 +134,7 @@ final class NativeCore {
         reconvertFunction = symbol("meltype_reconvert", as: ReconvertFunction.self)
         setDirectFunction = symbol("meltype_set_direct", as: SetDirectFunction.self)
         setCodeInputFunction = symbol("meltype_set_code_input", as: SetDirectFunction.self)
+        latinKeyboardLayoutFunction = symbol("meltype_latin_keyboard_layout", as: SessionStringFunction.self)
         dataDirectoryFunction = symbol("meltype_data_directory", as: DataDirectoryFunction.self)
         reportUrlFunction = symbol("meltype_report_url", as: ReportUrlFunction.self)
         freeFunction = symbol("meltype_free", as: FreeFunction.self)
@@ -194,6 +197,14 @@ final class NativeCore {
 
     func setCodeInput(_ session: UnsafeMutableRawPointer?, _ enabled: Bool) {
         setCodeInputFunction?(session, enabled ? 1 : 0)
+    }
+
+    /// 設定「英字のレイアウト」(config.json の LatinKeyboardLayout)。指定が無ければ nil。
+    func latinKeyboardLayout(_ session: UnsafeMutableRawPointer?) -> String? {
+        guard let pointer = latinKeyboardLayoutFunction?(session) else { return nil }
+        defer { freeFunction?(pointer) }
+        let layout = String(cString: pointer)
+        return layout.isEmpty ? nil : layout
     }
 
     /// 設定・学習データ・ユーザー辞書の保存場所。

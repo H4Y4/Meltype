@@ -344,6 +344,9 @@ public sealed class MeltypeSession
     /// <summary>変換ボックスに何か入っているか。</summary>
     public bool IsComposing => _controller.IsComposing;
 
+    /// <summary>設定「英字のレイアウト」(Mac 版だけが使う。空なら指定なし)。</summary>
+    public string LatinKeyboardLayout => _settings().LatinKeyboardLayout ?? "";
+
     /// <summary>
     /// キーを 1 つ処理する。before / after は入力欄のキャレットの前後の文字列 (分かれば。英語とも日本語とも読める語の判定と変換の文脈に使う)。
     /// </summary>
