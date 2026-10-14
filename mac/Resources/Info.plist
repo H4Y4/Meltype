@@ -75,12 +75,13 @@
 				<true/>
 				<key>tsInputModeDefaultStateKey</key>
 				<true/>
+				<!-- Latn (英字) は入れない。入れると macOS がこのモードを「英字を入力できる入力ソース」と扱い、
+				     パスワード欄 (ロック画面など) でも ABC に切り替えず、Meltype のまま変換してしまう。 -->
 				<key>tsInputModeCharacterRepertoireKey</key>
 				<array>
 					<string>Hira</string>
 					<string>Kana</string>
 					<string>Hani</string>
-					<string>Latn</string>
 				</array>
 			</dict>
 		</dict>
