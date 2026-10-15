@@ -78,14 +78,46 @@
   (write-file (merge-pathnames "start-input-method.sh" work)
               (uiop:read-file-string (merge-pathnames "mac/start-input-method.sh" *root*)))
   (fake-tool work "launchctl"
-             (format nil "echo \"$*\" >> \"$MELTYPE_TEST_LOG\"~%case \"$1\" in~% list) echo '\"PID\" = 123; Meltype_Connection' ;;~%esac"))
+             (format nil "echo \"$*\" >> \"$MELTYPE_TEST_LOG\"~%case \"$1\" in~% submit) touch \"$MELTYPE_START_LOG_DIR/submitted\" ;;~% list) if [[ -n \"${2:-}\" && -e \"$MELTYPE_START_LOG_DIR/submitted\" ]]; then echo '\"PID\" = 123; Meltype_Connection'; fi ;;~%esac"))
   (run-script work "start-input-method.sh" "/tmp/Meltype.app")
   (let ((lines (uiop:read-file-lines (merge-pathnames "calls" work))))
-    (assert (equal "remove io.github.yksr-melt.Meltype.manual" (first lines)))
-    (assert (uiop:string-prefix-p "submit -l io.github.yksr-melt.Meltype.manual -o " (second lines)))
-    (assert (search "Meltype.stdout.log -e " (second lines)))
-    (assert (search "Meltype.stderr.log -- /tmp/Meltype.app/Contents/MacOS/Meltype" (second lines)))
-    (assert (equal "list io.github.yksr-melt.Meltype.manual" (third lines)))))
+    (assert (equal '("list" "list io.github.yksr-melt.Meltype.manual"
+                     "remove io.github.yksr-melt.Meltype.manual")
+                   (subseq lines 0 3)))
+    (assert (uiop:string-prefix-p "submit -l io.github.yksr-melt.Meltype.manual -o " (fourth lines)))
+    (assert (search "Meltype.stdout.log -e " (fourth lines)))
+    (assert (search "Meltype.stderr.log -- /tmp/Meltype.app/Contents/MacOS/Meltype" (fourth lines)))
+    (assert (equal '("list" "list io.github.yksr-melt.Meltype.manual") (subseq lines 4)))))
+
+;;; macOS starts Meltype on demand (an "application." job) when an app asks for it, e.g. right after
+;;; install-app.sh stops the old one. A second Meltype would overwrite its IMK endpoint, so do not start one.
+(defparameter *on-demand-job* "application.io.github.yksr-melt.inputmethod.Meltype.1.2")
+
+(defun test-launchd-already-running (work)
+  (write-file (merge-pathnames "start-input-method.sh" work)
+              (uiop:read-file-string (merge-pathnames "mac/start-input-method.sh" *root*)))
+  (fake-tool work "launchctl"
+             (format nil "echo \"$*\" >> \"$MELTYPE_TEST_LOG\"~%case \"$1 ${2:-}\" in~% 'list ') printf '123\\t0\\t~A\\n' ;;~% 'list ~A') echo '\"PID\" = 123; Meltype_Connection' ;;~%esac"
+                     *on-demand-job* *on-demand-job*))
+  (run-script work "start-input-method.sh" "/tmp/Meltype.app")
+  (let ((lines (uiop:read-file-lines (merge-pathnames "calls" work))))
+    (assert (equal (list "list" "list io.github.yksr-melt.Meltype.manual"
+                         (concatenate 'string "list " *on-demand-job*))
+                   lines))))
+
+(defun test-launchd-on-demand-takeover (work)
+  (write-file (merge-pathnames "start-input-method.sh" work)
+              (uiop:read-file-string (merge-pathnames "mac/start-input-method.sh" *root*)))
+  ;; After the submit, the on-demand job owns the connection and the manual job only waits.
+  (fake-tool work "launchctl"
+             (format nil "echo \"$*\" >> \"$MELTYPE_TEST_LOG\"~%[[ -e \"$MELTYPE_START_LOG_DIR/submitted\" ]] || { [[ \"$1\" == submit ]] && touch \"$MELTYPE_START_LOG_DIR/submitted\"; exit 0; }~%case \"$1 ${2:-}\" in~% 'list ') printf '123\\t0\\t~A\\n' ;;~% 'list ~A') echo '\"PID\" = 123; Meltype_Connection' ;;~% 'list io.github.yksr-melt.Meltype.manual') echo '\"PID\" = 456;' ;;~%esac"
+                     *on-demand-job* *on-demand-job*))
+  (run-script work "start-input-method.sh" "/tmp/Meltype.app")
+  (let ((lines (uiop:read-file-lines (merge-pathnames "calls" work))))
+    (assert (= 1 (count-if (lambda (line) (uiop:string-prefix-p "submit " line)) lines)))
+    (assert (not (member "remove io.github.yksr-melt.Meltype.manual"
+                         (member-if (lambda (line) (uiop:string-prefix-p "submit " line)) lines)
+                         :test #'equal)))))
 
 (defun test-update-failure-recovery (work)
   (test-update work)
@@ -161,7 +193,7 @@
   (fake-tool work "codesign" "exit 0")
   (write-file (merge-pathnames "select-input-source.swift" work) "// fake selector")
   (fake-tool work "swift" "echo selected >> \"$MELTYPE_TEST_LOG\"")
-  (dolist (name '("pkill" "killall" "xattr" "lsregister"))
+  (dolist (name '("pkill" "killall" "xattr" "lsregister" "launchctl"))
     (fake-tool work name "exit 0"))
   (fake-tool work "open" "echo UNEXPECTED_OPEN >> \"$MELTYPE_TEST_LOG\"; exit 1")
   (run-script work "install.sh" nil)
@@ -184,6 +216,7 @@
   (write-file (merge-pathnames "source.app/version" work) "new")
   (write-file (merge-pathnames "installed.app/version" work) "previous")
   (fake-tool work "pkill" "echo stopped >> \"$MELTYPE_TEST_LOG\"")
+  (fake-tool work "launchctl" "echo \"launchctl:$*\" >> \"$MELTYPE_TEST_LOG\"")
   (dolist (failure '("copy" "signature" "replace"))
     (write-file (merge-pathnames "calls" work) "")
     (fake-tool work "ditto" (if (equal failure "copy") "exit 23" "cp -R \"$1\" \"$2\""))
@@ -201,8 +234,11 @@
           (setf status (uiop:subprocess-error-code condition))))
       (assert (eql 23 status)))
     (assert (equal "previous" (uiop:read-file-string (merge-pathnames "installed.app/version" work))))
-    (unless (equal failure "replace")
-      (assert (null (uiop:read-file-lines (merge-pathnames "calls" work)))))))
+    (if (equal failure "replace")
+        ;; The KeepAlive job goes first, or launchd restarts the old app before the swap.
+        (assert (equal '("launchctl:remove io.github.yksr-melt.Meltype.manual" "stopped")
+                       (uiop:read-file-lines (merge-pathnames "calls" work))))
+        (assert (null (uiop:read-file-lines (merge-pathnames "calls" work)))))))
 
 (defun test-partial-install-rollback (work)
   (test-install-rollback work)
@@ -256,6 +292,10 @@
       (format t "PASS update routing~%")
       (call-with-work-directory #'test-launchd-start)
       (format t "PASS launchd startup~%")
+      (call-with-work-directory #'test-launchd-already-running)
+      (format t "PASS on-demand server kept without a second Meltype~%")
+      (call-with-work-directory #'test-launchd-on-demand-takeover)
+      (format t "PASS on-demand server accepted during startup~%")
       (call-with-work-directory #'test-failed-start-does-not-select)
       (format t "PASS failed startup keeps input source~%")
       (call-with-work-directory #'test-distributed-install)
@@ -271,7 +311,7 @@
       (call-with-work-directory #'test-partial-install-rollback)
       (format t "PASS partial replacement rollback and backup preservation~%")
       (call-with-work-directory #'test-cross-volume-install-rejected)
-      (format t "PASS cross-volume switch rejected before stopping IME~%11/11 passed~%"))
+      (format t "PASS cross-volume switch rejected before stopping IME~%13/13 passed~%"))
   (error (condition)
     (format *error-output* "FAIL: ~A~%" condition)
     (uiop:quit 1)))
