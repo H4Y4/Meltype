@@ -82,6 +82,8 @@ struct EventTests {
   guard let server=IMKServer(name:"LocalMeltypeBoundaryTests",bundleIdentifier:Bundle.main.bundleIdentifier) else {fatalError("IMKServer creation failed")}
   var passed=0
   func check(_ name:String,_ body:(MeltypeInputController,EventClient)->Void) {
+   // 入力モード (自動・英数・コード) は入力欄をまたいで覚えている (ModeSelection)。前の確認で英数にしたままにならないよう、毎回 自動 から始める
+   ModeSelection.shared.select(.automatic)
    let client=EventClient()
    // IMKInputController の初期化は OS のクライアントプロキシ専用なので nil で初期化する。
    // handle / commitComposition には合成 IMKTextInput クライアントを明示して渡す。
