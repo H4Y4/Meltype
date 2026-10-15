@@ -112,6 +112,8 @@ final class NativeCore {
     private let latinKeyboardLayoutFunction: SessionStringFunction?
     private let dataDirectoryFunction: DataDirectoryFunction?
     private let reportUrlFunction: ReportUrlFunction?
+    private let exportSettingsFunction: ReportUrlFunction?
+    private let importSettingsFunction: ReportUrlFunction?
     private let freeFunction: FreeFunction?
 
     private init() {
@@ -138,6 +140,8 @@ final class NativeCore {
         latinKeyboardLayoutFunction = symbol("meltype_latin_keyboard_layout", as: SessionStringFunction.self)
         dataDirectoryFunction = symbol("meltype_data_directory", as: DataDirectoryFunction.self)
         reportUrlFunction = symbol("meltype_report_url", as: ReportUrlFunction.self)
+        exportSettingsFunction = symbol("meltype_export_settings", as: ReportUrlFunction.self)
+        importSettingsFunction = symbol("meltype_import_settings", as: ReportUrlFunction.self)
         freeFunction = symbol("meltype_free", as: FreeFunction.self)
     }
 
@@ -220,6 +224,25 @@ final class NativeCore {
         guard let pointer = "Mac".withCString({ reportUrlFunction?($0) }) else { return nil }
         defer { freeFunction?(pointer) }
         return URL(string: String(cString: pointer))
+    }
+
+    /// 今の設定を path に書き出す (Windows の設定画面の「書き出す...」と同じ形)。ok と、人に見せる文。
+    func exportSettings(to path: String) -> (ok: Bool, message: String) {
+        transferSettings(exportSettingsFunction, path)
+    }
+
+    /// path の設定を新しいプロファイルとして読み込んで使う (今の設定はプロファイルとして残る)。ok と、人に見せる文。
+    func importSettings(from path: String) -> (ok: Bool, message: String) {
+        transferSettings(importSettingsFunction, path)
+    }
+
+    /// 結果は 1 行目が "ok" か "error"、2 行目が人に見せる文 (Exports.cs の meltype_export_settings)。
+    private func transferSettings(_ function: ReportUrlFunction?, _ path: String) -> (ok: Bool, message: String) {
+        guard let function else { return (false, "この版の本体 (libMeltypeNative.dylib) は、設定の書き出し・読み込みに対応していません。") }
+        guard let pointer = path.withCString({ function($0) }) else { return (false, "結果を受け取れませんでした。") }
+        defer { freeFunction?(pointer) }
+        let lines = String(cString: pointer).split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
+        return (lines.first == "ok", lines.count > 1 ? String(lines[1]) : "")
     }
 
     private func decode(_ pointer: UnsafeMutablePointer<CChar>?) -> SessionResult? {

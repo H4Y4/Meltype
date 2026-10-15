@@ -22,7 +22,8 @@ final class MeltypeInputController: IMKInputController, ModeServiceTarget {
     private var reconvertingLocation = NSNotFound
     private var suggestionPanel: NSPanel?
     private var displayedSuggestion: String?
-    private var dictionaryObserver: NSObjectProtocol?
+    /// ユーザー辞書・設定が変わった通知 (入力の本体を作り直して読み直す)。
+    private var reloadObservers: [NSObjectProtocol] = []
 
     override func activateServer(_ sender: Any!) {
         super.activateServer(sender)
@@ -55,20 +56,23 @@ final class MeltypeInputController: IMKInputController, ModeServiceTarget {
         session = NativeCore.shared.createSession()
         NativeCore.shared.setDirect(session, directInput)
         NativeCore.shared.setCodeInput(session, codeInput)
-        dictionaryObserver = DistributedNotificationCenter.default().addObserver(
-            forName: Notification.Name("MeltypeUserDictionaryChanged"), object: nil, queue: .main
-        ) { [weak self] _ in
-            guard let self else { return }
-            self.commitComposition(self.client())
-            NativeCore.shared.destroySession(self.session)
-            self.session = NativeCore.shared.createSession()
-            NativeCore.shared.setDirect(self.session, self.directInput)
-            NativeCore.shared.setCodeInput(self.session, self.codeInput)
+        // ユーザー辞書を取り込んだ・設定を読み込んだ (ほかの入力欄で): 入力の本体を作り直して、新しい辞書・設定を読む
+        for name in ["MeltypeUserDictionaryChanged", "MeltypeSettingsChanged"] {
+            reloadObservers.append(DistributedNotificationCenter.default().addObserver(
+                forName: Notification.Name(name), object: nil, queue: .main
+            ) { [weak self] _ in
+                guard let self else { return }
+                self.commitComposition(self.client())
+                NativeCore.shared.destroySession(self.session)
+                self.session = NativeCore.shared.createSession()
+                NativeCore.shared.setDirect(self.session, self.directInput)
+                NativeCore.shared.setCodeInput(self.session, self.codeInput)
+            })
         }
     }
 
     deinit {
-        if let dictionaryObserver { DistributedNotificationCenter.default().removeObserver(dictionaryObserver) }
+        for observer in reloadObservers { DistributedNotificationCenter.default().removeObserver(observer) }
         NativeCore.shared.destroySession(session)
     }
 
@@ -275,6 +279,10 @@ final class MeltypeInputController: IMKInputController, ModeServiceTarget {
         indicator.state = ModeIndicatorSettings.shared.isEnabled ? .on : .off
         let importItem = menu.addItem(withTitle: "macOSのユーザー辞書を取り込む…", action: #selector(importUserDictionary(_:)), keyEquivalent: "")
         importItem.target = self
+        let exportSettingsItem = menu.addItem(withTitle: "設定を書き出す…", action: #selector(exportSettings(_:)), keyEquivalent: "")
+        exportSettingsItem.target = self
+        let importSettingsItem = menu.addItem(withTitle: "設定を読み込む… (Windows で書き出したものも)", action: #selector(importSettings(_:)), keyEquivalent: "")
+        importSettingsItem.target = self
         menu.addItem(withTitle: "Meltype のデータフォルダを開く (設定・ユーザー辞書)", action: #selector(openDataFolder(_:)), keyEquivalent: "")
         menu.addItem(withTitle: "不具合の報告・提案… (Mac 版はプレビュー版です)", action: #selector(openReport(_:)), keyEquivalent: "")
         return menu
@@ -360,6 +368,39 @@ final class MeltypeInputController: IMKInputController, ModeServiceTarget {
             alert.messageText = "ユーザー辞書を取り込めませんでした"
             alert.informativeText = error.localizedDescription
         }
+        alert.runModal()
+    }
+
+    /// 今の設定をファイルに書き出す (Windows の設定画面の「書き出す...」と同じ形。Windows でも読み込める)。
+    @objc private func exportSettings(_ sender: Any?) {
+        commitComposition(client())
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "Meltype の設定.meltype-profile.json"
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        showSettingsResult(NativeCore.shared.exportSettings(to: destination.path), title: "設定を書き出しました")
+    }
+
+    /// 書き出した設定 (Mac・Windows のどちらで書き出したものでも) を新しいプロファイルとして読み込む。今の設定はプロファイルとして残る。
+    @objc private func importSettings(_ sender: Any?) {
+        commitComposition(client())
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let source = panel.url else { return }
+        let result = NativeCore.shared.importSettings(from: source.path)
+        if result.ok {
+            // ほかの入力欄も含めて、入力の本体を作り直して新しい設定を読む
+            DistributedNotificationCenter.default().postNotificationName(
+                Notification.Name("MeltypeSettingsChanged"), object: nil, userInfo: nil, deliverImmediately: true)
+        }
+        showSettingsResult(result, title: "設定を読み込みました")
+    }
+
+    private func showSettingsResult(_ result: (ok: Bool, message: String), title: String) {
+        let alert = NSAlert()
+        alert.messageText = result.ok ? title : "できませんでした"
+        alert.informativeText = result.message
+        alert.alertStyle = result.ok ? .informational : .warning
         alert.runModal()
     }
 

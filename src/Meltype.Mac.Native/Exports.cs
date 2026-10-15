@@ -198,6 +198,45 @@ public static unsafe class Exports
     [UnmanagedCallersOnly(EntryPoint = "meltype_data_directory")]
     public static byte* DataDirectory() => ToUtf8(Config.AppPaths.DataDirectory);
 
+    /// <summary>
+    /// 今の設定を path に書き出す (Windows の設定画面の「書き出す...」と同じ形)。結果は 1 行目が "ok" か "error"、2 行目が人に見せる文。
+    /// meltype_free で解放する。
+    /// </summary>
+    [UnmanagedCallersOnly(EntryPoint = "meltype_export_settings")]
+    public static byte* ExportSettings(byte* path)
+    {
+        try
+        {
+            if (FromUtf8(path) is not { Length: > 0 } destination) return ToUtf8("error\n書き出す先が指定されていません。");
+            var name = Config.SettingsTransfer.Export(Config.AppPaths.ConfigFile, destination);
+            return ToUtf8($"ok\n設定 (プロファイル「{name}」) を書き出しました。アプリ別設定 (アプリの名前) も入っています。");
+        }
+        catch (Exception ex)
+        {
+            return ToUtf8($"error\n書き出せませんでした: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// path の設定を新しいプロファイルとして読み込んで使う (今の設定はプロファイルとして残る)。結果は meltype_export_settings と同じ形。
+    /// 動いている入力の本体は読み直さないので、呼んだ側が作り直す (Mac は MeltypeSettingsChanged の通知)。meltype_free で解放する。
+    /// </summary>
+    [UnmanagedCallersOnly(EntryPoint = "meltype_import_settings")]
+    public static byte* ImportSettings(byte* path)
+    {
+        try
+        {
+            if (FromUtf8(path) is not { Length: > 0 } source) return ToUtf8("error\n読み込むファイルが指定されていません。");
+            return Config.SettingsTransfer.Import(Config.AppPaths.ConfigFile, source) is { } name
+                ? ToUtf8($"ok\n設定を読み込み、プロファイル「{name}」にしました (前の設定もプロファイルとして残っています)。")
+                : ToUtf8("error\nMeltype の設定として読めませんでした。Meltype で書き出したファイル (*.meltype-profile.json) を選んでください。");
+        }
+        catch (Exception ex)
+        {
+            return ToUtf8($"error\n読み込めませんでした: {ex.Message}");
+        }
+    }
+
     /// <summary>Meltype.Core の版 (csproj の Version)。meltype_free で解放する。</summary>
     [UnmanagedCallersOnly(EntryPoint = "meltype_version")]
     public static byte* Version() => ToUtf8(Config.ProjectInfo.CoreVersion);

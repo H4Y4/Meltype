@@ -119,6 +119,11 @@ internal sealed class TrayApplicationContext : ApplicationContext
         menu.Items.Add(startup);
         menu.Items.Add("使い方...", null, (_, _) => ShowWelcome());
         menu.Items.Add("設定...", null, (_, _) => ShowSettings());
+        // 設定だけをファイルにする (Mac 版の入力メニューの「設定を書き出す…」と同じ形。ほかの PC・Mac と同じ設定にする)
+        var settingsFile = new ToolStripMenuItem("設定のファイル");
+        settingsFile.DropDownItems.Add("設定を書き出す...", null, (_, _) => ExportSettings());
+        settingsFile.DropDownItems.Add("設定を読み込む... (Mac で書き出したものも)", null, (_, _) => ImportSettings());
+        menu.Items.Add(settingsFile);
         menu.Items.Add("ユーザー辞書...", null, (_, _) => ShowUserDictionary());
         menu.Items.Add("定型文...", null, (_, _) => ShowSnippets());
         menu.Items.Add("ログ / 判定理由...", null, (_, _) => ShowLog());
@@ -600,6 +605,63 @@ internal sealed class TrayApplicationContext : ApplicationContext
         }
         _logForm = new LogForm(_engine);
         _logForm.Show();
+    }
+
+    private const string SettingsFileFilter = "Meltype の設定 (*.meltype-profile.json)|*.meltype-profile.json|JSON (*.json)|*.json|すべてのファイル (*.*)|*.*";
+
+    /// <summary>
+    /// 今の設定 (使っているプロファイル) をファイルに書き出す。設定画面の「書き出す...」と同じ形で、Mac 版でも読み込める。
+    /// 学習データ・ユーザー辞書は入れない (それはバックアップ)。
+    /// </summary>
+    private void ExportSettings()
+    {
+        using var dialog = new SaveFileDialog
+        {
+            Title = "Meltype の設定を書き出す",
+            Filter = SettingsFileFilter,
+            FileName = "Meltype の設定" + Config.SettingsTransfer.FileExtension,
+        };
+        if (dialog.ShowDialog() != DialogResult.OK) return;
+        try
+        {
+            File.WriteAllText(dialog.FileName, _engine.Settings.ExportProfile());
+            MessageBox.Show($"設定 (プロファイル「{_engine.Settings.ActiveProfile}」) を書き出しました。\n別の PC や Mac の Meltype で「設定を読み込む」を選ぶと、同じ設定にできます。\nアプリ別設定 (アプリの名前) も入っています。人に渡す前に、見られてもよいか確かめてください。",
+                "Meltype の設定", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"書き出せませんでした。\n\n{ex.Message}", "Meltype の設定", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    /// <summary>
+    /// 書き出した設定 (Windows・Mac のどちらのものでも) を新しいプロファイルとして読み込んで使う。今の設定はプロファイルとして残り、
+    /// トレイの「プロファイル」で戻せる。Meltype の ON/OFF・動作モード・ログ・更新など PC ごとの項目は変えない。
+    /// </summary>
+    private void ImportSettings()
+    {
+        using var dialog = new OpenFileDialog { Title = "Meltype の設定を読み込む", Filter = SettingsFileFilter };
+        if (dialog.ShowDialog() != DialogResult.OK) return;
+        try
+        {
+            var next = new FileInfo(dialog.FileName).Length <= Config.SettingsTransfer.MaxFileBytes
+                ? _engine.Settings.ImportProfile(File.ReadAllText(dialog.FileName))
+                : null;
+            if (next is null)
+            {
+                MessageBox.Show("Meltype の設定として読めませんでした。Meltype で書き出したファイル (*.meltype-profile.json) を選んでください。", "Meltype の設定",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            var previous = _engine.Settings.ActiveProfile;
+            _engine.ApplySettings(next);
+            MessageBox.Show($"設定を読み込み、プロファイル「{next.ActiveProfile}」にしました。\n前の設定はプロファイル「{previous}」として残っています (トレイの「プロファイル」で戻せます)。",
+                "Meltype の設定", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"読み込めませんでした。\n\n{ex.Message}", "Meltype の設定", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
     }
 
     /// <summary>設定・学習データ・ユーザー辞書を 1 つのファイルに書き出す (PC の買い替え・別の PC への移行)。</summary>

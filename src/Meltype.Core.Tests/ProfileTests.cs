@@ -109,6 +109,48 @@ internal static class ProfileTests
     }
 
     [Test]
+    public static void SettingsTransfer_MovesSettingsBetweenMacAndWindows()
+    {
+        // 要望: Windows と Mac で同じ設定を使いたい (同期はしない)。書き出したファイルを、もう一方の config.json に読み込む。
+        var directory = Directory.CreateTempSubdirectory("meltype-transfer-");
+        try
+        {
+            var mac = Path.Combine(directory.FullName, "mac-config.json");
+            var windows = Path.Combine(directory.FullName, "windows-config.json");
+            var file = Path.Combine(directory.FullName, "Meltype の設定" + SettingsTransfer.FileExtension);
+            new Settings
+            {
+                ControlKeys = ControlKeyStyle.Mac,
+                FullWidthParentheses = true,
+                LatinKeyboardLayout = "com.apple.keylayout.ABC",
+                DetectionLevel = DetectionLevel.Aggressive,
+                Enabled = false,
+            }.Save(mac);
+            new Settings { Mode = InputMode.Tsf, Enabled = true, FileLog = true }.Save(windows);
+
+            Assert.Equal(Settings.DefaultProfileName, SettingsTransfer.Export(mac, file), "書き出したプロファイルの名前");
+            var name = SettingsTransfer.Import(windows, file);
+            Assert.True(name is not null, "読み込める");
+            var imported = Settings.Load(windows);
+            Assert.Equal(name, imported.ActiveProfile, "読み込んだ設定を使う");
+            Assert.Equal(ControlKeyStyle.Mac, imported.ControlKeys);
+            Assert.True(imported.FullWidthParentheses, "括弧を全角にする");
+            Assert.Equal(DetectionLevel.Aggressive, imported.DetectionLevel);
+            Assert.Equal("com.apple.keylayout.ABC", imported.LatinKeyboardLayout, "Mac だけの項目も持ち運ぶ (Windows では使わない)");
+            Assert.True(imported.Enabled && imported.Mode == InputMode.Tsf && imported.FileLog, "PC ごとの項目 (ON/OFF・動作モード・ログ) は変えない");
+            Assert.Equal(2, imported.ProfileNames.Count, "前の設定もプロファイルとして残る: " + string.Join(", ", imported.ProfileNames));
+
+            File.WriteAllText(file, "{\"Mode\":\"Keyboard\"}");
+            Assert.Equal(null, SettingsTransfer.Import(windows, file), "Meltype の設定でないファイルは読まない");
+            Assert.Equal(name, Settings.Load(windows).ActiveProfile, "読めなかったときは設定を変えない");
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
+        }
+    }
+
+    [Test]
     public static void ProfileNames_AreNotWrittenToJson()
     {
         // プロファイルの名前の一覧は Profiles から作るので、config.json にも書き出したファイルにも入れない

@@ -100,6 +100,7 @@ cd mac
 - 「英数」「かな」キーが無い US 配列などでは、Control+Shift+J で日本語、Control+Shift+; (または ') で英数に切り替えられます (変換中の文字は確定してから英数になります。入力中は、Ctrl キーの割り当てがあればそちらが先に使われます。Apple の案内では、英字への切り替えは JIS 配列が Control+Shift+;、US 配列が Control+Shift+' ですが、Meltype は物理キーで判定するので、どちらの配列でも ; と ' の両方で英数になります。Apple の US 配列で Control+Shift+; は半角カタカナのモードですが、Meltype にはそのモードが無いので英数にしています。Control+Shift+K (カタカナ)・L (全角英字) など Meltype に無いモードのキーは何もせずアプリへ通します)
 - 先頭か空白の直後に打った `/review`・`$skill`・`@ファイル名` は、空白まで変換せずにそのまま入ります (`SigilWordsDirect` で OFF)
 - 設定・学習データ・ユーザー辞書は `~/Library/Application Support/Meltype` (入力メニューの「Meltype のデータフォルダを開く」)。設定は Windows 版と同じ `config.json` です (自動判定の強さ `DetectionLevel` など)
+- 設定を Windows や別の Mac と同じにするには、入力メニューの「設定を書き出す…」で `*.meltype-profile.json` にして、もう一方で「設定を読み込む…」を選びます (Windows ではトレイの「設定のファイル」)。読み込んだ設定は新しいプロファイルになり、前の設定も残ります。すぐに効きます。ターミナルからは `~/Library/Input\ Methods/Meltype.app/Contents/MacOS/Meltype --export-settings <ファイル>` / `--import-settings <ファイル>` でもできます
 - 括弧 `(` `)` を Mac の日本語入力と同じ全角の（ ）にするには、`config.json` に `"FullWidthParentheses": true` と書きます (書かなければ、今までどおり半角。URL・パスの中の括弧は ON でも半角のまま)。次に入力欄を選んだときから効きます。
 - ¥ キー・`\` キーで半角の `\` (バックスラッシュ) を入れるには、`config.json` に `"YenKey": "Backslash"` と書きます (書かない・`"Yen"` なら今までどおりで、JIS 配列の ¥ キーは `¥`、日本語の中で打った `\` は全角の ￥)。英数のときにも効き、Option+¥ は変えません。
 - キーを文字にするのに使う英字のキーボード配列 (macOS の日本語入力の「英字のレイアウト」) を決めるには、`config.json` の `"LatinKeyboardLayout"` に入力ソースの ID を書きます (`"com.apple.keylayout.ABC"`、`"com.apple.keylayout.US"`、`"com.apple.keylayout.Dvorak"` など)。書かなければ今までどおり、macOS が最後に使った英字の配列です。Mac に入っていない名前は無視します。次に入力欄を選んだときから効きます。

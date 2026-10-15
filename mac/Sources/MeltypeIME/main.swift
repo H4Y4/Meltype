@@ -14,6 +14,26 @@ if CommandLine.arguments.contains("--register-input-source") {
     exit(InputSourceRegistration.register() == 0 ? 0 : 1)
 }
 
+// Meltype --export-settings <ファイル> / --import-settings <ファイル>: 設定を書き出す・読み込む
+// (Windows の設定画面の「書き出す...」と同じ形。読み込んだ設定は新しいプロファイルになり、今の設定はプロファイルとして残る)
+for option in ["--export-settings", "--import-settings"] {
+    guard let index = CommandLine.arguments.firstIndex(of: option) else { continue }
+    guard index + 1 < CommandLine.arguments.count else {
+        FileHandle.standardError.write("使い方: Meltype \(option) <ファイル>\n".data(using: .utf8)!)
+        exit(2)
+    }
+    let path = URL(fileURLWithPath: CommandLine.arguments[index + 1]).path
+    let importing = option == "--import-settings"
+    let result = importing ? NativeCore.shared.importSettings(from: path) : NativeCore.shared.exportSettings(to: path)
+    if result.ok && importing {
+        // 動いている Meltype に、入力の本体を作り直して新しい設定を読むように知らせる
+        DistributedNotificationCenter.default().postNotificationName(
+            Notification.Name("MeltypeSettingsChanged"), object: nil, userInfo: nil, deliverImmediately: true)
+    }
+    print(result.message)
+    exit(result.ok ? 0 : 1)
+}
+
 // Input Method Kit のサーバーを起動する。入力欄 (クライアント) ごとに MeltypeInputController が作られる。
 
 /// 変換の候補の一覧 (すべての入力欄で共有する)。
