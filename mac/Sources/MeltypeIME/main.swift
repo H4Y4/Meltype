@@ -39,6 +39,20 @@ for option in ["--export-settings", "--import-settings"] {
 /// 変換の候補の一覧 (すべての入力欄で共有する)。
 var candidatesWindow: IMKCandidates?
 
+// 別の Meltype が IME として動いていれば、終わるまで待つ (ServerLock の説明を参照)。
+// 待っている間は本体も読み込まない (学習データを 2 つの Meltype で書き換えないように)。
+var serverLock: Int32?
+if !CommandLine.arguments.contains("--self-test") && !CommandLine.arguments.contains("--check-inputs"),
+   let bundleIdentifier = Bundle.main.bundleIdentifier {
+    let url = ServerLock.defaultURL(bundleIdentifier: bundleIdentifier)
+    serverLock = ServerLock.acquire(at: url, wait: false)
+    if serverLock == nil {
+        NSLog("Meltype: 別の Meltype が動いているので、終わるまで待ちます")
+        serverLock = ServerLock.acquire(at: url, wait: true)
+        NSLog("Meltype: 前の Meltype が終わったので、引き継ぎます")
+    }
+}
+
 // 本体 (libMeltypeNative.dylib) を読み込み、漢字変換・英単語の判定の関数を登録しておく。
 NativeCore.shared.initialize()
 

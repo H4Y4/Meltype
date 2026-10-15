@@ -270,6 +270,9 @@ bash ~/Documents/github/other/Meltype/mac/update.sh
 更新は `update.sh → build-cli.sh --test --install → build.sh` を通ります。
 通常の更新では LaunchServices の `open Meltype.app` を使わず、`start-input-method.sh` が GUI セッションの launchd 管理下で起動します。
 プロセスと IMK 接続の準備完了を確認してから登録・選択します。起動できなければ入力ソースを選択せずエラーにします。
+入れ替えの直後に macOS がアプリの求めで Meltype を先に起動していれば、それを使い、2 つ目は起動しません。
+Meltype が 2 つ動くと、後の方が IMK の接続先を上書きし、それが終わったときに接続先が空になって、その間に打ったアプリはアプリを再起動するまで入力できなくなります。
+そのため 2 つ目の Meltype は、先の Meltype が終わるまで IMK に何も登録せずに待ちます (`ServerLock.swift`)。
 設定画面を開くコマンドはありません。設定画面へ移動したという報告の原因はまだ確定していません。
 
 日本語と英語の境目には既定で空白を追加しません。`seeyouagain` のような登録済み英語フレーズ内には半角空白を補います。
