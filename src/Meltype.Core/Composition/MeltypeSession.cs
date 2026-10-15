@@ -221,6 +221,8 @@ public sealed class MeltypeSession
             CandidateMeanings = () => settings.ShowCandidateMeanings,
             CorrectTypos = () => settings.CorrectTypos,
             SlashAsMiddleDot = () => settings.SlashAsMiddleDot,
+            FullWidthParentheses = () => settings.FullWidthParentheses,
+            YenKey = () => settings.YenKey,
             SpaceAroundEnglish = () => settings.SpaceAroundEnglish,
             AutomaticEnglishSpacing = () => autoSpacing,
             ShiftArrowPaging = shiftArrowPaging,
@@ -342,10 +344,25 @@ public sealed class MeltypeSession
     /// <summary>変換ボックスに何か入っているか。</summary>
     public bool IsComposing => _controller.IsComposing;
 
+    /// <summary>設定「英字のレイアウト」(Mac 版だけが使う。空なら指定なし)。</summary>
+    public string LatinKeyboardLayout => _settings().LatinKeyboardLayout ?? "";
+
     /// <summary>
     /// キーを 1 つ処理する。before / after は入力欄のキャレットの前後の文字列 (分かれば。英語とも日本語とも読める語の判定と変換の文脈に使う)。
     /// </summary>
     public SessionResult HandleKey(int vk, char? ch, bool shift, bool control, bool alt, bool command, string? before = null, string? after = null)
+    {
+        // 設定「¥ キーで入力する文字」が \ (バックスラッシュ) なら、¥ の文字で届くキー (Mac の JIS 配列の ¥ キー) を \ のキーとして扱う。
+        // 使わなかったキーは打った文字 (¥) のままアプリへ渡るので、そのときは渡さずに \ を入れる (英数・コードの行)。
+        if (ch == '¥' && !control && !alt && !command && _settings() is { Enabled: true, YenKey: YenKeyStyle.Backslash })
+        {
+            var result = HandleCharacterKey(vk, '\\', shift, control, alt, command, before, after);
+            return result.Consumed ? result : result with { Consumed = true, Commits = [.. result.Commits, new TextEdit(0, "\\")] };
+        }
+        return HandleCharacterKey(vk, ch, shift, control, alt, command, before, after);
+    }
+
+    private SessionResult HandleCharacterKey(int vk, char? ch, bool shift, bool control, bool alt, bool command, string? before, string? after)
     {
         if (CodeInput && !_controller.IsComposing) before = SyncCodeLine(before);
         // 文字列を閉じる引用符は英数のままアプリに通す (打っている途中の日本語は確定する。空の文字列 "" を閉じるときも)

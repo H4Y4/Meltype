@@ -119,6 +119,22 @@ internal static class SettingsJsonTests
     }
 
     [Test]
+    public static void SettingsJson_LatinKeyboardLayout()
+    {
+        // Mac 版だけが使う「英字のレイアウト」。書かなければ空 (指定なし)、前後の空白は取る
+        Assert.Equal("", new Settings().LatinKeyboardLayout, "既定は指定なし");
+        var path = Path.Combine(Path.GetTempPath(), "meltype-latin-layout-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            File.WriteAllText(path, "{ \"SettingsVersion\": 5, \"LatinKeyboardLayout\": \" com.apple.keylayout.US \" }");
+            Assert.Equal("com.apple.keylayout.US", Settings.Load(path).LatinKeyboardLayout, "config.json から読む");
+            File.WriteAllText(path, "{ \"SettingsVersion\": 5, \"LatinKeyboardLayout\": null }");
+            Assert.Equal("", Settings.Load(path).LatinKeyboardLayout, "null は指定なし");
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Test]
     public static void SettingsJson_KeepsMigratedSettingsWhenSaveFails()
     {
         var directory = Path.Combine(Path.GetTempPath(), "meltype-settings-json-" + Guid.NewGuid().ToString("N"));

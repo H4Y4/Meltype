@@ -188,6 +188,12 @@ internal static class CompositionTests
         /// <summary>入力中の Ctrl キーの割り当て (設定)。</summary>
         public Meltype.Config.ControlKeyStyle ControlKeys { get; set; }
 
+        /// <summary>( ) を全角にするか (設定)。</summary>
+        public bool FullWidthParentheses { get; set; }
+
+        /// <summary>¥ キー・\ キーで入れる文字 (設定)。</summary>
+        public Meltype.Config.YenKeyStyle YenKey { get; set; }
+
         /// <summary>かな入力で、仮想キーを順に打つ (shift: その打鍵で Shift を押す)。</summary>
         public void TypeKeys(params (int Vk, bool Shift)[] keys)
         {
@@ -258,6 +264,8 @@ internal static class CompositionTests
                 Punctuation = () => Punctuation,
                 ControlKeys = () => ControlKeys,
                 SlashAsMiddleDot = () => slashAsMiddleDot,
+                FullWidthParentheses = () => FullWidthParentheses,
+                YenKey = () => YenKey,
                 Now = now ?? (() => DateTime.Now),
                 ShowTypedKeys = () => showTypedKeys,
                 ShiftArrowPaging = shiftArrowPaging,
@@ -2556,6 +2564,114 @@ internal static class CompositionTests
     }
 
     [Test]
+    public static void Parentheses_FollowSetting()
+    {
+        // 設定「括弧 ( ) を全角にする」。OFF (既定) は今までどおり半角、ON は英語を囲んでいても全角。
+        string Type(string keys, bool on, string? before = null)
+        {
+            var k = new Keyboard { FullWidthParentheses = on };
+            k.Host.PrecedingText = before;
+            k.Type(keys);
+            return k.Host.Document;
+        }
+        foreach (var (keys, half, full) in new[]
+        {
+            ("kore(nihongo)desu\n", "これ(にほんご)です", "これ（にほんご）です"),
+            ("jinkoutinou(AI)desu\n", "じんこうちのう(AI)です", "じんこうちのう（AI）です"),
+            ("kore(123)desu\n", "これ(123)です", "これ（123）です"),
+            ("(test)\n", "(test)", "（test）"),
+            ("()\n", "()", "（）"),
+        })
+        {
+            Assert.Equal(half, Type(keys, on: false), "OFF は半角: " + keys.TrimEnd());
+            Assert.Equal(full, Type(keys, on: true), "ON は全角: " + keys.TrimEnd());
+        }
+        // 区切りを点数で選ぶ (α版) でも同じ
+        Detector.UseScoredSegmentation = () => true;
+        try
+        {
+            Assert.Equal("（test）", Type("(test)\n", on: true), "点数で選ぶ: 英字だけ");
+            Assert.Equal("じんこうちのう（AI）です", Type("jinkoutinou(AI)desu\n", on: true), "点数で選ぶ: 日本語の中");
+            Assert.Equal("(test)", Type("(test)\n", on: false), "点数で選ぶ: OFF は半角");
+        }
+        finally
+        {
+            Detector.UseScoredSegmentation = null;
+        }
+        // 英文の続き (キャレットの前が英語) でも、ON なら全角
+        Assert.Equal("（maybe）", Type("(maybe)\n", on: true, before: "I think "), "英文の続き");
+        // 閉じていない括弧の後ろが英語でも全角のまま
+        Assert.Equal("（Ooh", Type("(Ooh\n", on: true), "閉じていない括弧");
+        // パスの中の括弧は ON でも半角のまま (OFF と同じ結果になる): / のすぐ後ろ、パスのすぐ後ろ、その中の括弧
+        foreach (var keys in new[] { "app/(auth)/login/page.tsx\n", "~/dir(1)/a.txt\n", "~/a(b(c))/d\n", "C:\\dir(1)\n", "1/(2+3)\n", "https://example.com/a_(b)\n" })
+        {
+            Assert.Equal(Type(keys, on: false), Type(keys, on: true), "パスの中は半角のまま: " + keys.TrimEnd());
+        }
+        // パスを囲む括弧は全角、その中のパスの括弧は半角
+        Assert.Equal("ふぁいる（~/a.txt）をひらく", Type("fairu(~/a.txt)wohiraku\n", on: true), "パスを囲む括弧");
+        Assert.Equal("これ（~/a(1)）です", Type("kore(~/a(1))desu\n", on: true), "パスを囲む括弧と、パスの中の括弧");
+        // 中黒にした / (設定「/ キーで中黒」) の後ろはパスではない
+        var dot = new Keyboard(slashAsMiddleDot: true) { FullWidthParentheses = true };
+        dot.Type("i-ron/(masuku)\n");
+        Assert.Equal("いーろん・（ますく）", dot.Host.Document, "中黒の後ろは全角");
+        // ほかの開きの記号は今までどおり、英語を囲むと半角に戻る
+        Assert.Equal("これ{AI}です", Type("kore{AI}desu\n", on: true), "{ } は対象外");
+        // F10 (半角英数) は打ったまま
+        var f10 = new Keyboard { FullWidthParentheses = true };
+        f10.Type("(a)");
+        f10.Press(VirtualKeys.F10);
+        Assert.Equal("(a)", f10.Showing, "F10 は半角");
+    }
+
+    [Test]
+    public static void Parentheses_FullWidth_HalfWidthCandidate()
+    {
+        // ON でも、Space で変換すれば候補から半角の ( を選べる
+        var k = new Keyboard { FullWidthParentheses = true };
+        k.Type("( ");
+        Assert.Equal("（", k.Host.View!.Candidates[0]);
+        Assert.True(k.Host.View.Candidates.Contains("("), "（ の候補に ( がある: " + string.Join(",", k.Host.View.Candidates));
+    }
+
+    [Test]
+    public static void Parentheses_SettingIsSaved()
+    {
+        Assert.True(!new Meltype.Config.Settings().FullWidthParentheses, "既定は OFF (半角)");
+        var path = Path.Combine(Path.GetTempPath(), $"meltype-parentheses-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(path, "{ \"SettingsVersion\": 5, \"FullWidthParentheses\": true }");
+            Assert.True(Meltype.Config.Settings.Load(path).FullWidthParentheses, "config.json から読む");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Test]
+    public static void YenKey_FollowsSetting()
+    {
+        // 設定「¥ キーで入力する文字」。既定は今までどおり \ が全角の ￥、\ (バックスラッシュ) なら半角のまま。
+        string Type(string keys, Meltype.Config.YenKeyStyle style)
+        {
+            var k = new Keyboard { YenKey = style };
+            k.Type(keys);
+            return k.Host.Document;
+        }
+        Assert.Equal("これ￥です", Type("kore\\desu\n", Meltype.Config.YenKeyStyle.Yen), "既定は全角の ￥");
+        Assert.Equal("これ\\です", Type("kore\\desu\n", Meltype.Config.YenKeyStyle.Backslash), "\\ は半角のまま");
+        Assert.Equal("\\", Type("\\\n", Meltype.Config.YenKeyStyle.Backslash), "\\ だけ");
+        // Windows のパスは、どちらの設定でも打ったまま
+        foreach (var style in new[] { Meltype.Config.YenKeyStyle.Yen, Meltype.Config.YenKeyStyle.Backslash })
+        {
+            Assert.Equal("C:\\dir\\a.txt", Type("C:\\dir\\a.txt\n", style), "パスは打ったまま: " + style);
+        }
+        Assert.Equal(Meltype.Config.YenKeyStyle.Yen, new Meltype.Config.Settings().YenKey, "既定は ¥ (今までどおり)");
+        Assert.True(new Meltype.Config.Settings { YenKey = Meltype.Config.YenKeyStyle.Backslash }.ToJson().Contains("\"YenKey\": \"Backslash\""), "名前で保存");
+    }
+
+    [Test]
     public static void ShortProperNoun_AfterJapanese_IsJapanese()
     {
         // ある程度は (aruteidoha) の doha を固有名詞 (Doha) として英字にしていた
@@ -3699,11 +3815,86 @@ internal static class CompositionTests
             return Script.TryGetValue(hiragana, out var clauses) ? string.Concat(clauses.Select(c => c.Text)) : _inner.Convert(hiragana);
         }
 
-        public IReadOnlyList<ConversionClause>? ConvertClauses(string hiragana, string? context = null)
+        public IReadOnlyList<ConversionClause>? ConvertClauses(string hiragana, string? context = null) => ConvertClauses(hiragana, context, null);
+
+        /// <summary>かな → 渡された後ろの文脈 (最後に渡されたもの)。</summary>
+        public Dictionary<string, string?> Following { get; } = [];
+
+        public IReadOnlyList<ConversionClause>? ConvertClauses(string hiragana, string? context, string? following)
         {
             Contexts.Add((hiragana, context));
+            Following[hiragana] = following;
             return Script.TryGetValue(hiragana, out var clauses) ? clauses : _inner.ConvertClauses(hiragana, context);
         }
+    }
+
+    [Test]
+    public static void NeuralConverter_UsesFieldTextRightAfterOwnCommit()
+    {
+        // 確定した直後 (1.5 秒以内) は自分の記録 (最後の 20 文字) を文脈に使う。入力欄の文字がいつも最新で (Mac)、
+        // 確定した文字まで進んでいるなら、入力欄から読んだ長い方を使う。
+        (bool Current, string Field, string Expected, string Why)[] cases =
+        [
+            (true, "これは二十文字を超える長さの前の文です。熱い", "これは二十文字を超える長さの前の文です。熱い", "入力欄が確定した文字まで進んでいれば、入力欄の文字"),
+            (true, "これは二十文字を超える長さの前の文です。", "熱い", "入力欄がまだ進んでいなければ、自分の記録"),
+            (false, "これは二十文字を超える長さの前の文です。熱い", "熱い", "入力欄の文字が最新とは限らない環境 (Windows のフック) では、自分の記録"),
+        ];
+        foreach (var (current, field, expected, why) in cases)
+        {
+            var converter = new AwareConverter();
+            var k = new Keyboard(converter: converter, moreCandidates: _ => []);
+            k.Host.SurroundingTextIsCurrent = current;
+            k.Type("atsui \n");
+            Assert.Equal("熱い", k.Host.Document, "確定");
+            converter.Contexts.Clear();
+            k.Host.PrecedingText = field;
+            k.Type("samui ");
+            Assert.True(converter.Contexts.Count > 0 && converter.Contexts.All(c => c.Context == expected),
+                why + ": " + string.Join(" / ", converter.Contexts.Select(c => c.Context)));
+        }
+    }
+
+    [Test]
+    public static void NeuralConverter_GetsFollowingText()
+    {
+        // 変換する読みのすぐ後ろに続く文字も、変換エンジンに渡す (かいとう + した冷凍食品 → 解凍)。
+        // 入力欄のキャレットの後ろの確定済みの文字: 行の終わりまで、最大 20 文字
+        var converter = new AwareConverter();
+        var k = new Keyboard(converter: converter, moreCandidates: _ => []);
+        k.Host.FollowingText = "した冷凍食品を食べる。次の文もここまでは渡す\n次の行は渡さない";
+        k.Type("atsui ");
+        Assert.Equal("した冷凍食品を食べる。次の文もここまでは", converter.Following["あつい"], "キャレットの後ろの文字を 20 文字まで渡す");
+
+        converter = new AwareConverter();
+        k = new Keyboard(converter: converter, moreCandidates: _ => []);
+        k.Host.FollowingText = "\n次の行";
+        k.Type("atsui ");
+        Assert.True(converter.Following["あつい"] is null, "行の終わりにいるときは、次の行を渡さない");
+
+        // 同じ入力の中で後ろに続く英単語 (きどうを + debug → 起動を)。その後ろの日本語 (する) と、入力欄の文字は続けない
+        foreach (var live in new[] { false, true })
+        {
+            converter = new AwareConverter();
+            converter.Script["あついを"] = [new("あついを", "熱いを")];
+            k = new Keyboard(live: live, converter: converter, moreCandidates: _ => []);
+            k.Host.FollowingText = "の後ろ";
+            k.Type("atsuiwodebugsuru" + (live ? "" : " "));
+            Assert.Equal("debug", converter.Following["あついを"], $"後ろの英単語を渡す (live={live})");
+            Assert.Equal("の後ろ", converter.Following["する"], $"最後のかなには、入力欄のキャレットの後ろの文字を渡す (live={live})");
+        }
+        // 後ろが日本語のかな (変換前) なら渡さない: 記号で分かれた前のかな
+        converter = new AwareConverter();
+        k = new Keyboard(converter: converter, moreCandidates: _ => []);
+        k.Host.FollowingText = "の後ろ";
+        k.Type("atsui(samui ");
+        Assert.True(converter.Following["あつい"] is null, "後ろが変換前のかななら渡さない");
+        Assert.Equal("の後ろ", converter.Following["さむい"], "記号の後ろの最後のかなには、入力欄の文字を渡す");
+
+        // 文脈を見ない変換エンジンは今までどおり (後ろの文脈という考えが無い)
+        var plain = new Keyboard();
+        plain.Host.FollowingText = "の後ろ";
+        plain.Type("atsui ");
+        Assert.Equal("熱い", string.Concat(plain.Host.View!.Clauses!), "文脈を見ない変換エンジンの結果は変わらない");
     }
 
     [Test]

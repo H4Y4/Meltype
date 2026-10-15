@@ -251,6 +251,12 @@ public sealed class CompositionText
     /// <summary>かなのすぐ後ろの / を中黒 (・) にするか (設定)。</summary>
     public Func<bool> SlashAsMiddleDot { get; set; } = () => false;
 
+    /// <summary>( ) を全角の（ ）にするか (設定)。ON なら、英語を囲んでいても全角のまま。</summary>
+    public Func<bool> FullWidthParentheses { get; set; } = () => false;
+
+    /// <summary>¥ キー・\ キーで入れる文字 (設定)。\ (バックスラッシュ) なら、\ を全角の ￥ にしない。</summary>
+    public Func<YenKeyStyle> YenKey { get; set; } = () => YenKeyStyle.Yen;
+
     /// <summary>
     /// 英単語の最後の n と、続けて打った n + 母音 (の・な …) が「nn → ん」とまとまってしまうのを防ぐ
     /// (python + no → pythonno → python + ん + お ではなく python + の)。
@@ -735,7 +741,7 @@ public sealed class CompositionText
         if (partial)
         {
             // 構造の境界がローマ字単位の途中に入った場合だけ、その区間の原文を読み直す。
-            var fragment = new CompositionText(_detector);
+            var fragment = new CompositionText(_detector) { FullWidthParentheses = FullWidthParentheses, YenKey = YenKey };
             foreach (var c in Raw[from..to]) fragment.Append(c);
             pending = fragment.Pending;
             return [.. fragment.Units];
@@ -770,6 +776,8 @@ public sealed class CompositionText
         for (var i = 0; i < _units.Count; i++)
         {
             if (!Openers.TryGetValue(_units[i].Raw, out var closer) || _units[i].Kana == _units[i].Raw) continue;
+            // 設定で全角にした括弧は、英語を囲んでいても全角のまま (人工知能（AI）)。
+            if (IsFullWidthParenthesis(_units[i])) continue;
             var nextIsEnglish = i + 1 < _units.Count ? offsets[i + 1] < english.Count && english[offsets[i + 1]] && char.IsAsciiLetter(_units[i + 1].Raw[0])
                 : Pending.Length > 0 && segments.Count > 0 && segments[^1].IsEnglish;
             var closing = Enumerable.Range(i + 1, _units.Count - i - 1).FirstOrDefault(k => _units[k].Raw == closer, -1);
@@ -787,10 +795,16 @@ public sealed class CompositionText
             if (!nextIsEnglish && !(closing >= 0 && IsHalf(closing)) && afterEnglish < 0 && !unclosedBeforeEnglish) continue;
             adjusted ??= [.. _units];
             adjusted[i] = _units[i] with { Kana = _units[i].Raw };
-            for (var k = afterEnglish + 1; afterEnglish >= 0 && k <= closing; k++) adjusted[k] = _units[k] with { Kana = _units[k].Raw };
+            for (var k = afterEnglish + 1; afterEnglish >= 0 && k <= closing; k++)
+            {
+                if (!IsFullWidthParenthesis(_units[k])) adjusted[k] = _units[k] with { Kana = _units[k].Raw };
+            }
         }
         return adjusted;
     }
+
+    /// <summary>設定「括弧 ( ) を全角にする」で全角にした括弧か (OFF なら ( ) の表示は半角なので、ここには来ない)。</summary>
+    internal static bool IsFullWidthParenthesis(CompositionUnit unit) => unit is { Raw: "(", Kana: "（" } or { Raw: ")", Kana: "）" };
 
     /// <summary>判定の強さが「手動」のとき、標準の判定なら英字にする部分 (提案)。無ければ null。</summary>
     public string? Suggestion()
@@ -943,6 +957,15 @@ public sealed class CompositionText
     /// </summary>
     public string RenderedBefore { get; private set; } = "";
 
+    /// <summary>
+    /// <see cref="RenderSegments"/> が convert を呼んでいる間だけ: その区間のすぐ後ろに続く英語の区間の文字 (きどうを + debug なら debug)。
+    /// 次の日本語の区間の手前まで (変換前のかなは、変換エンジンに文脈として渡すと害になる)。
+    /// </summary>
+    public string RenderedAfter { get; private set; } = "";
+
+    /// <summary><see cref="RenderSegments"/> が convert を呼んでいる間だけ: その区間の後ろに日本語の区間が無いか (無ければ、入力欄のキャレットの後ろの文字が続く)。</summary>
+    public bool RenderedAfterReachesEnd { get; private set; } = true;
+
     /// <summary>英語区間は英字のまま、日本語区間はかな (または漢字)。保護範囲は打った原文のまま。</summary>
     public string RenderSegments(bool final, Func<string, string>? convert)
     {
@@ -969,13 +992,27 @@ public sealed class CompositionText
             if (convert is not null && kana.Length > 0)
             {
                 RenderedBefore = builder.ToString();
+                (RenderedAfter, RenderedAfterReachesEnd) = EnglishAfter(segments, i);
                 builder.Append(convert(kana));
                 RenderedBefore = "";
+                (RenderedAfter, RenderedAfterReachesEnd) = ("", true);
             }
             else builder.Append(kana);
             builder.Append(pending);
         }
         return builder.ToString();
+    }
+
+    /// <summary>index の区間のすぐ後ろに続く英語の区間の文字 (次の日本語の区間の手前まで) と、後ろに日本語の区間が無いか。</summary>
+    public static (string Text, bool ReachesEnd) EnglishAfter(IReadOnlyList<CompositionSegment> segments, int index)
+    {
+        var after = new StringBuilder();
+        for (var k = index + 1; k < segments.Count; k++)
+        {
+            if (!segments[k].IsEnglish) return (after.ToString(), false);
+            after.Append(segments[k].Raw);
+        }
+        return (after.ToString(), true);
     }
 
     /// <summary>英語判定を無視してすべてかなにしたもの (F6)。</summary>
@@ -1278,9 +1315,8 @@ public sealed class CompositionText
         '.' => Period,
         '[' => '「',
         ']' => '」',
-        // ASCII の括弧はチャット本文でもそのまま使われるため、入力した幅を保つ。
-        '(' => '(',
-        ')' => ')',
+        // ASCII の括弧はチャット本文でもそのまま使われるため、入力した幅を保つ。設定で全角にできる。
+        '(' or ')' => Parenthesis(c),
         // ! ? は Microsoft IME と同じく全角 (テスターのチャットでも、日本語の後ろの ？ ！ は 96% が全角だった)。
         // : ; | はチャット本文でも半角で使うので、入力した幅を保つ。
         ':' => ':',
@@ -1294,11 +1330,37 @@ public sealed class CompositionText
         // # はハッシュタグ・チャンネル名 (Discord の #雑談) で使うので半角のまま (Space で ＃)。
         '#' => '#',
         '/' => '/',
-        // JIS キーボードの ￥ キー
-        '\\' => '￥',
+        // JIS キーボードの ￥ キー。設定で \ (バックスラッシュ) にしていれば半角のまま。
+        '\\' => YenKey() == YenKeyStyle.Backslash ? '\\' : '￥',
         _ when c is >= '!' and <= '~' && !char.IsAsciiLetterOrDigit(c) => (char)(c + 0xFEE0),
         _ => c,
     };
+
+    /// <summary>
+    /// 今打った括弧。設定「括弧 ( ) を全角にする」が ON なら全角の（ ）。
+    /// ON でも、パスの中の括弧は半角のまま: / \ のすぐ後ろ (app/(auth)/login) と、パスのすぐ後ろ (~/dir(1)/a.txt) の開き括弧。
+    /// 半角の括弧の中の括弧 (~/a(b(c))/d) と閉じ括弧は、外側・対になる開き括弧と同じ幅にする。
+    /// </summary>
+    private char Parenthesis(char c)
+    {
+        if (!FullWidthParentheses()) return c;
+        // まだ閉じていない開き括弧のうち、いちばん内側のものが半角か
+        var insideHalfWidth = false;
+        var depth = 0;
+        for (var i = _units.Count - 1; i >= 0; i--)
+        {
+            if (_units[i].Raw == ")") depth++;
+            else if (_units[i].Raw == "(" && depth-- == 0)
+            {
+                insideHalfWidth = _units[i].Kana == "(";
+                break;
+            }
+        }
+        if (c == ')') return insideHalfWidth ? ')' : '）';
+        var afterSeparator = _units.Count > 0 && _units[^1] is { Raw: "/" or "\\", Kana: not "・" };
+        var afterPath = ProtectedSpanScanner.TryTail(Raw, out var span) && span.Kind is ProtectedKind.PosixPath or ProtectedKind.WindowsPath;
+        return insideHalfWidth || afterSeparator || afterPath ? '(' : '（';
+    }
 
     /// <summary>全角の記号 (＃ （ ％ ’ ￥) を半角に戻す。かな・漢字・句読点 (、。「」ー) はそのまま。</summary>
     public static string SymbolsToHalfWidth(string text)

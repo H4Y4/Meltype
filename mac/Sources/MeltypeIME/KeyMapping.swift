@@ -34,6 +34,12 @@ enum KeyMapping {
         default: break
         }
         guard let scalar = event.charactersIgnoringModifiers?.lowercased().unicodeScalars.first else { return nil }
+        return virtualKey(forCharacter: scalar)
+    }
+
+    /// 文字を入力するキーの仮想キーコード (scalar は小文字にした文字)。
+    /// 自己診断 (--check-inputs) でも使う: 文字コードをそのまま渡すと、( が ↓ キー (0x28) になるなど、記号が別のキーになる。
+    static func virtualKey(forCharacter scalar: Unicode.Scalar) -> Int32? {
         switch scalar {
         case "a"..."z": return Int32(scalar.value) - 0x20   // A-Z = 0x41-0x5A
         case "0"..."9": return Int32(scalar.value)          // 0-9 = 0x30-0x39

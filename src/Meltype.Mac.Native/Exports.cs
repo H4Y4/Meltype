@@ -20,8 +20,8 @@ namespace Meltype.Mac;
 /// </summary>
 public static unsafe class Exports
 {
-    /// <summary>(ひらがな, 文脈 or NULL) → 「読み\t変換結果」を改行でつないだ文字列 (文節ごと)。変換できなければ NULL。</summary>
-    private static delegate* unmanaged<byte*, byte*, byte*> s_clauses;
+    /// <summary>(ひらがな, 前の文脈 or NULL, 後ろの文脈 or NULL) → 「読み\t変換結果」を改行でつないだ文字列 (文節ごと)。変換できなければ NULL。</summary>
+    private static delegate* unmanaged<byte*, byte*, byte*, byte*> s_clauses;
 
     /// <summary>読み → 候補を改行でつないだ文字列。</summary>
     private static delegate* unmanaged<byte*, byte*> s_candidates;
@@ -31,7 +31,7 @@ public static unsafe class Exports
 
     /// <summary>Swift 側の関数を登録する (最初に 1 回)。</summary>
     [UnmanagedCallersOnly(EntryPoint = "meltype_init")]
-    public static int Init(delegate* unmanaged<byte*, byte*, byte*> clauses, delegate* unmanaged<byte*, byte*> candidates, delegate* unmanaged<byte*, int> isWord)
+    public static int Init(delegate* unmanaged<byte*, byte*, byte*, byte*> clauses, delegate* unmanaged<byte*, byte*> candidates, delegate* unmanaged<byte*, int> isWord)
     {
         s_clauses = clauses;
         s_candidates = candidates;
@@ -189,6 +189,11 @@ public static unsafe class Exports
         if (handle != IntPtr.Zero && GCHandle.FromIntPtr(handle).Target is MeltypeSession session) session.CanDeleteSurrounding = canDelete != 0;
     }
 
+    /// <summary>設定「英字のレイアウト」(config.json の LatinKeyboardLayout。指定が無ければ空文字)。meltype_free で解放する。</summary>
+    [UnmanagedCallersOnly(EntryPoint = "meltype_latin_keyboard_layout")]
+    public static byte* LatinKeyboardLayout(IntPtr handle) =>
+        ToUtf8(handle != IntPtr.Zero && GCHandle.FromIntPtr(handle).Target is MeltypeSession session ? session.LatinKeyboardLayout : "");
+
     /// <summary>データの保存場所 (設定・学習・ユーザー辞書)。meltype_free で解放する。</summary>
     [UnmanagedCallersOnly(EntryPoint = "meltype_data_directory")]
     public static byte* DataDirectory() => ToUtf8(Config.AppPaths.DataDirectory);
@@ -247,14 +252,17 @@ public static unsafe class Exports
         public string? Convert(string hiragana) =>
             ConvertClauses(hiragana) is { Count: > 0 } clauses ? string.Concat(clauses.Select(c => c.Text)) : null;
 
-        public IReadOnlyList<ConversionClause>? ConvertClauses(string hiragana, string? context = null)
+        public IReadOnlyList<ConversionClause>? ConvertClauses(string hiragana, string? context = null) => ConvertClauses(hiragana, context, null);
+
+        public IReadOnlyList<ConversionClause>? ConvertClauses(string hiragana, string? context, string? following)
         {
             if (s_clauses == null) return null;
             var input = ToUtf8(hiragana, out var inputBuffer);
             var contextPointer = context is null ? null : ToUtf8(context, out var contextBuffer);
+            var followingPointer = following is null ? null : ToUtf8(following, out var followingBuffer);
             try
             {
-                var text = TakeUtf8(s_clauses(input, contextPointer));
+                var text = TakeUtf8(s_clauses(input, contextPointer, followingPointer));
                 if (text is null) return null;
                 var clauses = new List<ConversionClause>();
                 foreach (var line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries))
@@ -270,6 +278,7 @@ public static unsafe class Exports
             {
                 NativeMemory.Free(inputBuffer);
                 if (contextPointer != null) NativeMemory.Free(contextPointer);
+                if (followingPointer != null) NativeMemory.Free(followingPointer);
             }
         }
     }

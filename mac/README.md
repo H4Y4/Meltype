@@ -100,6 +100,9 @@ cd mac
 - 「英数」「かな」キーが無い US 配列などでは、Control+Shift+J で日本語、Control+Shift+; (または ') で英数に切り替えられます (変換中の文字は確定してから英数になります。入力中は、Ctrl キーの割り当てがあればそちらが先に使われます。Apple の案内では、英字への切り替えは JIS 配列が Control+Shift+;、US 配列が Control+Shift+' ですが、Meltype は物理キーで判定するので、どちらの配列でも ; と ' の両方で英数になります。Apple の US 配列で Control+Shift+; は半角カタカナのモードですが、Meltype にはそのモードが無いので英数にしています。Control+Shift+K (カタカナ)・L (全角英字) など Meltype に無いモードのキーは何もせずアプリへ通します)
 - 先頭か空白の直後に打った `/review`・`$skill`・`@ファイル名` は、空白まで変換せずにそのまま入ります (`SigilWordsDirect` で OFF)
 - 設定・学習データ・ユーザー辞書は `~/Library/Application Support/Meltype` (入力メニューの「Meltype のデータフォルダを開く」)。設定は Windows 版と同じ `config.json` です (自動判定の強さ `DetectionLevel` など)
+- 括弧 `(` `)` を Mac の日本語入力と同じ全角の（ ）にするには、`config.json` に `"FullWidthParentheses": true` と書きます (書かなければ、今までどおり半角。URL・パスの中の括弧は ON でも半角のまま)。次に入力欄を選んだときから効きます。
+- ¥ キー・`\` キーで半角の `\` (バックスラッシュ) を入れるには、`config.json` に `"YenKey": "Backslash"` と書きます (書かない・`"Yen"` なら今までどおりで、JIS 配列の ¥ キーは `¥`、日本語の中で打った `\` は全角の ￥)。英数のときにも効き、Option+¥ は変えません。
+- キーを文字にするのに使う英字のキーボード配列 (macOS の日本語入力の「英字のレイアウト」) を決めるには、`config.json` の `"LatinKeyboardLayout"` に入力ソースの ID を書きます (`"com.apple.keylayout.ABC"`、`"com.apple.keylayout.US"`、`"com.apple.keylayout.Dvorak"` など)。書かなければ今までどおり、macOS が最後に使った英字の配列です。Mac に入っていない名前は無視します。次に入力欄を選んだときから効きます。
 - 入力中の Ctrl キーを Mac の日本語入力と同じにするには、`config.json` に `"ControlKeys": "Mac"` と書きます (書かない・`"Atok"` なら、今までどおり Ctrl+U/I/O/P。ほかの設定と同じく、知らない名前を書くと config.json 全体が既定値に戻り、元のファイルは config.json.broken に残ります)。次に入力欄を選んだときから効きます。
   Ctrl+J ひらがな / Ctrl+K カタカナ / Ctrl+L 全角英字 / Ctrl+; ・Ctrl+: ・Ctrl+' 半角英字 (macOS の既定の「ローマ字に変換」と同じ。US 配列の : は Shift+; になるので割り当てなし、Shift の要らない Ctrl+; か Ctrl+' を使います。US 配列の Ctrl+Shift+; (= Ctrl+:) と、英字に切り替える Ctrl+Shift+' (US)・Ctrl+Shift+; (JIS) は本体に割り当てが無いので、上の Control+Shift+; ・' と同じく、確定して英数に切り替わります。半角カタカナは F8) /
   Ctrl+N 次の候補 / Ctrl+P 前の候補 / Ctrl+F 次の文節 / Ctrl+B 前の文節 / Ctrl+W・Ctrl+O 文節を伸ばす / Ctrl+I 縮める / Ctrl+V 次のページ・Ctrl+R 前のページ (ページ送りは変換中だけ)。
@@ -108,7 +111,11 @@ cd mac
 <a name="ニューラル変換"></a>
 ### ニューラル変換
 
-漢字変換には、azooKey のニューラル変換 Zenzai を使います。文全体と、キャレットの前の文字 (同じ入力の中で前にある英単語も含む) を見て、区切りと漢字を選びます。
+漢字変換には、azooKey のニューラル変換 Zenzai を使います。文全体と、キャレットの前後の文字を見て、区切りと漢字を選びます。
+
+- 前の文字: 入力欄の確定済みの文字 (前の文も含めて 40 文字まで、行の頭まで) と、同じ入力の中で前にある英単語 (`meltype` + のへんかんせいど → の変換精度)
+- 後ろの文字: 入力欄のキャレットの後ろの確定済みの文字 (20 文字まで、行の終わりまで) と、同じ入力の中で後ろに続く英単語 (きどうを + `debug` → 起動を)。文の途中に書き足すときに効きます (かいとう + した冷凍食品 → 解凍)
+- 入力欄の文字を読めないアプリでは、前後の文字は使えません。ログを ON にすると、確定のたびに渡した文脈の長さ (「変換エンジンに渡した文脈: 前 12 文字、後ろ 0 文字」) が残るので、届いているかを確かめられます
 
 - 辞書と統計だけの変換では `せいかくなへんかん` → 正確な返還、`ひとつかえただけ` → 人使えただけ になっていたものが、正確な変換・ひとつ変えただけ になります
 - 公開の評価データ [AJIMEE-Bench](https://github.com/ensan-hcl/AJIMEE-Bench) (200 件) の 1 位の正解率は、使わないとき 44.0%、使うとき 85.5% です (M6 の Mac、推論の上限 5 回)
@@ -229,6 +236,7 @@ bash ~/Documents/github/other/Meltype/mac/update.sh
 手入力の空白は保持します。ローマ字と同じ綴りの未知の単語は意図を一意に判別できないため、英数の直接入力・コード入力も利用できます。
 
 ビルドしたアプリで、インストールせずに検証できます。
+`--check-inputs` のファイルは 1 行に「打つキー・期待する出力」をタブで区切って書きます。3 列目に入力欄のキャレットの前の文字、4 列目に後ろの文字を書くと、その入力欄で打ったものとして確かめます (文字の中の `\n` は改行)。
 
 ```bash
 mac/build/Meltype.app/Contents/MacOS/Meltype --check-inputs mac/Resources/InputChecks.tsv

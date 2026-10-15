@@ -112,6 +112,43 @@ internal static class SessionFacadeTests
     }
 
     [Test]
+    public static void YenKey_Backslash_ReplacesYenCharacter()
+    {
+        // 設定「¥ キーで入力する文字」が \ なら、¥ の文字で届くキー (Mac の JIS 配列の ¥ キー) も \ にする。
+        MeltypeSession Create(YenKeyStyle style, bool direct = false, bool enabled = true)
+        {
+            var settings = new Settings { YenKey = style, Enabled = enabled, SigilWordsDirect = false };
+            return new MeltypeSession(CompositionTests.Detector, new CompositionTests.FakeConverter(),
+                new CompositionOptions { YenKey = () => style }, () => settings) { Direct = direct };
+        }
+        const int OtherCharacterKey = 0x07;
+        SessionResult Yen(MeltypeSession session, bool option = false) => session.HandleKey(OtherCharacterKey, '¥', false, false, option, false);
+
+        // 既定: 今までどおり、打ったままアプリへ渡す
+        var result = Yen(Create(YenKeyStyle.Yen));
+        Assert.True(!result.Consumed && result.Commits.Count == 0 && result.View is null, "既定は ¥ のままアプリへ渡す");
+
+        // \: 日本語入力では、\ として変換ボックスに入る (半角のまま)
+        var japanese = Create(YenKeyStyle.Backslash);
+        Type(japanese, "kore");
+        result = Yen(japanese);
+        Assert.True(result.Consumed, "¥ のキーはアプリへ渡さない");
+        Assert.Equal("これ\\", result.View?.Text, "\\ として入力中の文字に入る");
+
+        // \: 英数 (直接入力) では、¥ を渡さずに \ を入れる
+        result = Yen(Create(YenKeyStyle.Backslash, direct: true));
+        Assert.True(result.Consumed, "英数でも ¥ のキーはアプリへ渡さない");
+        Assert.Equal("\\", string.Concat(result.Commits.Select(edit => edit.Text)), "英数では \\ を入れる");
+        Assert.True(result.Commits.All(edit => edit.DeleteBefore == 0), "何も消さない");
+
+        // Option と一緒のキー・Meltype が OFF のときは触らない
+        result = Yen(Create(YenKeyStyle.Backslash), option: true);
+        Assert.True(!result.Consumed && result.Commits.Count == 0, "Option+¥ はそのまま");
+        result = Yen(Create(YenKeyStyle.Backslash, enabled: false));
+        Assert.True(!result.Consumed && result.Commits.Count == 0, "OFF のときはそのまま");
+    }
+
+    [Test]
     public static void TsfDirectMode_RomajiDetectionCanBeDisabled()
     {
         var settings = new Settings { DirectModeAutoDetect = false };

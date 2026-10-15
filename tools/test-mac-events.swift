@@ -43,7 +43,8 @@ final class EventClient: NSObject, IMKTextInput {
  func characterIndex(for point:NSPoint, tracking mode:IMKLocationToOffsetMappingMode, inMarkedRange:UnsafeMutablePointer<ObjCBool>!)->Int {inMarkedRange?.pointee=false; return 0}
  func attributes(forCharacterIndex index:Int, lineHeightRectangle rectangle:UnsafeMutablePointer<NSRect>!)->[AnyHashable:Any]! {rectangle?.pointee=NSRect(x:0,y:0,width:1,height:20); return [:]}
  func validAttributesForMarkedText()->[Any]! {[]}
- func overrideKeyboard(withKeyboardNamed name:String!) {}
+ var overriddenKeyboards:[String]=[]
+ func overrideKeyboard(withKeyboardNamed name:String!) {overriddenKeyboards.append(name)}
  func selectMode(_ identifier:String!) {}
  func supportsUnicode()->Bool {true}
  func bundleIdentifier()->String! {"local.meltype.event-client"}
@@ -56,7 +57,7 @@ final class EventClient: NSObject, IMKTextInput {
 #if !REAL_CONVERTER
 final class MeltypeConverter {
  static let shared=MeltypeConverter()
- func clauses(for text:String,context:String?)->[(reading:String,text:String)] {text=="つくえ" ? [(reading:text,text:"机")] : []}
+ func clauses(for text:String,context:String?,following:String?=nil)->[(reading:String,text:String)] {text=="つくえ" ? [(reading:text,text:"机")] : []}
  // ページ送りのテスト用に、つくえ だけ 30 個の候補を返す (他の読みは今までどおり空)。
  func candidates(for text:String)->[String] {text=="つくえ" ? (1...30).map {"候補\($0)"} : []}
 }
@@ -262,6 +263,58 @@ struct EventTests {
    var object=(originalConfig.flatMap { try? JSONSerialization.jsonObject(with:$0) } as? [String:Any]) ?? [:]
    if let style { object["ControlKeys"]=style }
    try! JSONSerialization.data(withJSONObject:object).write(to:configURL)
+  }
+  // 英字のレイアウト (設定 LatinKeyboardLayout)。入力欄を選んだとき (activateServer) に、指定した配列でキーを文字にしてもらう。
+  func writeSetting(_ key:String,_ value:Any?) {
+   var object=(originalConfig.flatMap { try? JSONSerialization.jsonObject(with:$0) } as? [String:Any]) ?? [:]
+   if let value { object[key]=value }
+   try! JSONSerialization.data(withJSONObject:object).write(to:configURL)
+  }
+  func writeLatinKeyboardLayout(_ layout:String?) { writeSetting("LatinKeyboardLayout",layout) }
+  // 括弧 (設定 FullWidthParentheses) と ¥ キー (設定 YenKey)。JIS 配列の ¥ キーは characters が "¥" (U+00A5) で届く。
+  writeSetting("FullWidthParentheses",nil)
+  check("parentheses stay half-width without a setting") { controller,client in
+   type(controller,client,"kore(are)")
+   equal(client.marked,"これ(あれ)")
+  }
+  check("yen key passes through without a setting") { controller,client in
+   precondition(!key(controller,client,"¥",code:UInt16(kVK_JIS_Yen)),"the yen key must pass to the app")
+   equal(client.document,"¥"); equal(client.marked,"")
+  }
+  writeSetting("FullWidthParentheses",true)
+  check("FullWidthParentheses makes parentheses full-width") { controller,client in
+   type(controller,client,"kore(are)")
+   equal(client.marked,"これ（あれ）")
+  }
+  writeSetting("YenKey","Backslash")
+  check("YenKey Backslash turns the yen key into a backslash in the composition") { controller,client in
+   type(controller,client,"kore")
+   precondition(key(controller,client,"¥",code:UInt16(kVK_JIS_Yen)),"the yen key must be handled by the IME")
+   equal(client.marked,"これ\\"); equal(client.document,"")
+  }
+  check("YenKey Backslash inserts a backslash in direct input") { controller,client in
+   precondition(key(controller,client,"",code:UInt16(kVK_JIS_Eisu)),"Eisu switches to direct input")
+   precondition(key(controller,client,"¥",code:UInt16(kVK_JIS_Yen)),"the yen key must not pass to the app")
+   equal(client.document,"\\"); equal(client.marked,"")
+  }
+  check("YenKey Backslash leaves Option+yen alone") { controller,client in
+   precondition(!key(controller,client,"\\",code:UInt16(kVK_JIS_Yen),flags:[.option]),"Option+yen must pass to the app")
+   equal(client.document,"\\"); equal(client.marked,"")
+  }
+  writeLatinKeyboardLayout(nil)
+  check("no Latin keyboard layout setting leaves the keyboard alone") { controller,client in
+   controller.activateServer(client)
+   precondition(client.overriddenKeyboards.isEmpty,"no override without a setting")
+  }
+  writeLatinKeyboardLayout("com.apple.keylayout.US")
+  check("Latin keyboard layout setting overrides the keyboard on activation") { controller,client in
+   controller.activateServer(client)
+   precondition(client.overriddenKeyboards==["com.apple.keylayout.US"],"override with the configured layout: \(client.overriddenKeyboards)")
+  }
+  writeLatinKeyboardLayout("com.example.keylayout.Missing")
+  check("unknown Latin keyboard layout is ignored") { controller,client in
+   controller.activateServer(client)
+   precondition(client.overriddenKeyboards.isEmpty,"no override with a layout that is not installed")
   }
   writeControlKeys(nil)
   check("Ctrl+J without a setting is not assigned (ATOK style)") { controller,client in
@@ -473,6 +526,11 @@ struct EventTests {
    let contextual=converter.clauses(for:"のせいどがひくい",context:"このIME").map(\.text).joined()
    precondition(contextual=="の精度が低い","neural left context: \(contextual)")
    precondition(converter.candidates(for:"へんかん").contains("返還"),"candidate list lost alternatives")
+   // The text right after the reading decides homophones that the left context cannot (かいとう + した冷凍食品 → 解凍).
+   let thawed=converter.clauses(for:"かいとう",context:nil,following:"した冷凍食品を食べる").map(\.text).joined()
+   precondition(thawed=="解凍","neural right context: \(thawed)")
+   let answered=converter.clauses(for:"かいとう",context:nil,following:"用紙に名前を書く").map(\.text).joined()
+   precondition(answered != "解凍","right context must not be ignored or cached across requests: \(answered)")
    // Regression: the candidate list for the reading just converted by the neural engine crashed the IME
    // (azooKey reused the previous lattice: にゅうりょく / しゅうせい + Space). It trapped, so reaching the end is the check.
    for reading in ["にゅうりょく","しゅうせい","へんかん","きのう"] {
@@ -481,8 +539,8 @@ struct EventTests {
     _=converter.clauses(for:reading,context:"この")
     precondition(!converter.candidates(for:reading).isEmpty,"candidate list after contextual conversion: \(reading)")
    }
-   passed+=5
-   print("PASS: neural conversion (segmentation, homophones, left context, candidate list, candidate list after the same reading)")
+   passed+=6
+   print("PASS: neural conversion (segmentation, homophones, left context, right context, candidate list, candidate list after the same reading)")
   } else {
    print("NOT_RUN: neural conversion (no model in mac/.build/zenz)")
   }

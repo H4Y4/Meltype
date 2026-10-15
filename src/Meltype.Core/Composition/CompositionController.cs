@@ -187,6 +187,12 @@ public sealed record CompositionOptions
     /// <summary>かなのすぐ後ろの / を中黒 (・) にするか (設定)。</summary>
     public Func<bool> SlashAsMiddleDot { get; init; } = () => false;
 
+    /// <summary>日本語入力で打った ( ) を全角の（ ）にするか (設定)。</summary>
+    public Func<bool> FullWidthParentheses { get; init; } = () => false;
+
+    /// <summary>¥ キー・\ キーで入れる文字 (設定)。</summary>
+    public Func<Config.YenKeyStyle> YenKey { get; init; } = () => Config.YenKeyStyle.Yen;
+
     /// <summary>確定するときに、日本語と英単語の間に半角スペースを入れるか (設定)。</summary>
     public Func<bool> SpaceAroundEnglish { get; init; } = () => false;
     public Func<bool> AutomaticEnglishSpacing { get; init; } = () => false;
@@ -295,6 +301,10 @@ public sealed class CompositionController
     private string? _followingText;
     /// <summary>今変換している日本語の区間より前にある、同じ入力の中の区間の表示 (meltype + のへんかんせいど なら meltype)。</summary>
     private string _compositionBefore = "";
+    /// <summary>今変換している日本語の区間のすぐ後ろに続く、同じ入力の中の英語の区間の文字 (きどうを + debug なら debug)。</summary>
+    private string _compositionAfter = "";
+    /// <summary>今変換している日本語の区間の後ろに、同じ入力の中の日本語が無いか (無ければ、入力欄のキャレットの後ろの文字が続く)。</summary>
+    private bool _compositionAfterReachesEnd = true;
     /// <summary>入力欄が教えてくれた、キャレットの直前の確定済みの文字 (読めなければ null)。確定し直してよいかの判断に使う。</summary>
     private string? _caretBefore;
     private long _lastCommitTime = long.MinValue / 2;
@@ -352,6 +362,8 @@ public sealed class CompositionController
         if (_options.RomajiTypos is { } lexicon) detector.IsCommonJapanese ??= lexicon.IsCommonJapanese;
         _text.CorrectTypos = () => _options.CorrectTypos();
         _text.SlashAsMiddleDot = () => _options.SlashAsMiddleDot();
+        _text.FullWidthParentheses = () => _options.FullWidthParentheses();
+        _text.YenKey = () => _options.YenKey();
     }
 
     /// <summary>変換ボックスに入力中か、英数状態で打ち始めの語を判定中か。</summary>
@@ -946,7 +958,7 @@ public sealed class CompositionController
         foreach (var word in text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
         {
             // 前の語が日本語でも「日本語の続き」とはしない (空白で区切って打った語なので、語の途中ではない)
-            var typed = new CompositionText(_detector) { PrecedingEnglish = previousEnglish == true ? true : null, Punctuation = _options.Punctuation() };
+            var typed = new CompositionText(_detector) { PrecedingEnglish = previousEnglish == true ? true : null, Punctuation = _options.Punctuation(), FullWidthParentheses = _options.FullWidthParentheses, YenKey = _options.YenKey };
             foreach (var c in word) typed.Append(c);
             var segments = typed.Segments(final: true);
             foreach (var segment in segments)
@@ -996,6 +1008,13 @@ public sealed class CompositionController
                 if (LanguageOf(before) is { } english) _text.PrecedingEnglish = english;
                 _text.PrecedingEnglishSentence = IsEnglishSentence(before);
                 _text.PrecedingEnglishName = IsEnglishNameContext(before);
+            }
+            // 確定した直後は自分の記録 (最後の 20 文字) を使うが、入力欄の文字がいつも最新で (Mac)、確定した文字まで進んでいるなら、
+            // 変換エンジンに渡す文脈は入力欄から読んだ長い方にする。英語 / 日本語の判定に使う値は、今までどおり自分の記録のまま。
+            else if (recentOwnCommit && before is not null && _host.SurroundingTextIsCurrent &&
+                     _lastCommitText is { Length: > 0 } own && before.Length > own.Length && before.EndsWith(own, StringComparison.Ordinal))
+            {
+                _precedingText = before;
             }
             _followingText = after;
             _text.FollowingEnglish = LanguageOfStart(after);
@@ -1362,8 +1381,10 @@ public sealed class CompositionController
             }
             if (segment.Kana.Length == 0) continue;
             _compositionBefore = string.Concat(clauses.Select(c => c.Text));
+            (_compositionAfter, _compositionAfterReachesEnd) = CompositionText.EnglishAfter(segments, s);
             var japanese = ConvertJapanese(segment.Kana);
             _compositionBefore = "";
+            (_compositionAfter, _compositionAfterReachesEnd) = ("", true);
             // 英単語 + する (push|した、deploy|しよう): 変換エンジンは英語の後ろの「した」だけを見て 下・死体・使用 にしてしまう。かなのまま
             // ニューラルの変換エンジンは、前の英単語を文脈に見て pushした・cpu使用率 を自分で選び分ける (かなに戻すと cpuしようりつ になる)。
             if (!Neural && s > 0 && segments[s - 1].IsEnglish && japanese.Count > 0 && IsSuruAfterEnglish(japanese[0])) Prefer(japanese[0], japanese[0].Reading);
@@ -1471,6 +1492,7 @@ public sealed class CompositionController
             var result = new List<Clause>();
             var start = 0;
             var outer = _compositionBefore;
+            var (outerAfter, outerReachesEnd) = (_compositionAfter, _compositionAfterReachesEnd);
             for (var i = 1; i <= kana.Length; i++)
             {
                 if (i < kana.Length && keep[i] == keep[start]) continue;
@@ -1481,11 +1503,14 @@ public sealed class CompositionController
                 {
                     // 記号の後ろの区間には、同じ区間の中で前にある文字も文脈として続ける (前の区間を飛ばした古い文脈は、文脈なしより悪い)。
                     _compositionBefore = outer + string.Concat(result.Select(c => c.Text));
+                    // 後ろの文脈は、最後のかなだけ (途中のかなの後ろは記号と変換前のかななので、渡さない)
+                    (_compositionAfter, _compositionAfterReachesEnd) = i == kana.Length ? (outerAfter, outerReachesEnd) : ("", false);
                     result.AddRange(ConvertJapanese(run));
                 }
                 start = i;
             }
             _compositionBefore = outer;
+            (_compositionAfter, _compositionAfterReachesEnd) = (outerAfter, outerReachesEnd);
             return result;
         }
         if (_options.UserDictionary?.Split(kana) is not { } split) return ConvertWithEngine(kana);
@@ -1508,11 +1533,16 @@ public sealed class CompositionController
         if (pieces.All(p => p.Word is null && p.Engine is null)) return ConvertWithEngine(kana);
         var clauses = new List<Clause>();
         var registered = new List<Clause>();
-        foreach (var (reading, word, engine) in pieces)
+        var (pieceAfter, pieceReachesEnd) = (_compositionAfter, _compositionAfterReachesEnd);
+        for (var p = 0; p < pieces.Count; p++)
         {
+            var (reading, word, engine) = pieces[p];
             if (word is null)
             {
+                // 後ろの文脈は、最後のかなだけ (途中のかなの後ろは登録した語なので、渡さない)
+                (_compositionAfter, _compositionAfterReachesEnd) = p == pieces.Count - 1 ? (pieceAfter, pieceReachesEnd) : ("", false);
                 clauses.AddRange(ConvertWithEngine(reading, engine));
+                (_compositionAfter, _compositionAfterReachesEnd) = (pieceAfter, pieceReachesEnd);
                 continue;
             }
             var clause = new Clause(reading, false, JapaneseCandidates(reading, word));
@@ -1549,7 +1579,7 @@ public sealed class CompositionController
     {
         var unchanged = pieces.Select(p => (p.Reading, p.Word, (IReadOnlyList<ConversionClause>?)null)).ToList();
         if (_options.UserDictionary is not { } dictionary) return unchanged;
-        var engine = ConversionContext() is { } context ? ConvertWithContext(kana, context) : _converter.ConvertClauses(kana);
+        var engine = ConversionContext() is { } context ? ConvertWithContext(kana, context) : Clauses(kana, null);
         if (engine is null || string.Concat(engine.Select(c => c.Reading)) != kana) return unchanged;
         var starts = new HashSet<int>();
         for (int i = 0, offset = 0; i < engine.Count; offset += engine[i].Reading.Length, i++) starts.Add(offset);
@@ -1615,7 +1645,7 @@ public sealed class CompositionController
         var context = ConversionContext();
         var parts = engine ?? (context is not null
             ? ConvertWithContext(kana, context)
-            : _converter.ConvertClauses(kana, !Neural && kana.Length >= 3 && kana[0] == 'に' ? "これ" : null));
+            : Clauses(kana, !Neural && kana.Length >= 3 && kana[0] == 'に' ? "これ" : null));
         parts ??= [new ConversionClause(kana, _converter.Convert(kana) ?? kana)];
         // 読み全体が補助辞書・絵文字の辞書の語 (かんがえるかお → 🤔) なら、文節に分けずに 1 つの文節にして候補を出す。
         if (parts.Count > 1 && _options.Candidates?.Contains(kana) == true)
@@ -1768,7 +1798,7 @@ public sealed class CompositionController
     /// </summary>
     private IReadOnlyList<ConversionClause>? ConvertWithContext(string kana, string context)
     {
-        if (_converter is IContextAwareConverter) return _converter.ConvertClauses(kana, context);
+        if (_converter is IContextAwareConverter) return Clauses(kana, context);
         var withContext = _converter.ConvertClauses(kana, context);
         var plain = _converter.ConvertClauses(kana);
         if (withContext is null || plain is null) return withContext ?? plain;
@@ -1794,6 +1824,40 @@ public sealed class CompositionController
     }
 
     private static readonly char[] LineEnds = ['\n', '\r'];
+
+    /// <summary>
+    /// 変換エンジンに渡す後ろの文脈: 変換する読みのすぐ後ろに続く文字 (最大 20 文字、行の終わりまで)。
+    /// 同じ入力の中の英語の区間 (きどうを + debug) と、その後ろに日本語の区間が無ければ、入力欄のキャレットの後ろの確定済みの文字。
+    /// 変換前のかなは入れない。文脈を読むニューラルの変換エンジンだけ。
+    /// </summary>
+    private string? ConversionFollowing()
+    {
+        if (!Neural) return null;
+        var text = _compositionAfter + (_compositionAfterReachesEnd ? _followingText : "");
+        if (string.IsNullOrEmpty(text)) return null;
+        var end = text.IndexOfAny(LineEnds);
+        if (end >= 0) text = text[..end];
+        // 入力欄が返す、埋め込みの印 (画像・添付の U+FFFC) や制御文字は文脈にしない
+        if (text.Any(c => char.IsControl(c) || c == '\uFFFC')) text = new string(text.Where(c => !char.IsControl(c) && c != '\uFFFC').ToArray());
+        text = text.Trim();
+        if (text.Length > FollowingLimit) text = text[..(char.IsHighSurrogate(text[FollowingLimit - 1]) ? FollowingLimit - 1 : FollowingLimit)];
+        return text.Length == 0 ? null : text;
+    }
+
+    /// <summary>後ろの文脈の長さ。10 文字あれば効果は頭打ちになる (AJIMEE-Bench を前後に分けた 70 件: 5 文字 66 件、10 文字以上 67 件)。</summary>
+    private const int FollowingLimit = 20;
+
+    /// <summary>文節に区切って変換する。文脈を読むニューラルの変換エンジンには、後ろの文脈も渡す。</summary>
+    private IReadOnlyList<ConversionClause>? Clauses(string kana, string? context)
+    {
+        if (_converter is not IContextAwareConverter aware) return _converter.ConvertClauses(kana, context);
+        var following = ConversionFollowing();
+        _contextStats = (context?.Length ?? 0, following?.Length ?? 0);
+        return aware.ConvertClauses(kana, context, following);
+    }
+
+    /// <summary>最後の変換で変換エンジンに渡した文脈の長さ (前・後ろ)。確定したときにログに出す (文脈が届いているかを確かめるため)。</summary>
+    private (int Before, int After)? _contextStats;
 
     private static readonly char[] SentenceEnds = ['。', '．', '！', '？', '\n', '\r'];
 
@@ -2280,11 +2344,14 @@ public sealed class CompositionController
         // ただし、同じ入力の中で前に区間がある (mail + をみる) なら、ニューラルの変換エンジンは前の語を文脈に見て正しく選べるので変換する
         // (mailをみる・pcをかう のまま確定されていた)。
         if (kana.Length < LiveConversionMinLength && !(Neural && before.Length > 0)) return kana;
-        var key = string.Join("\u0001", kana, _precedingText, _followingText, _options.History?.Version, before);
+        var (after, reachesEnd) = (_text.RenderedAfter, _text.RenderedAfterReachesEnd);
+        var key = string.Join("\u0001", kana, _precedingText, _followingText, _options.History?.Version, before, after, reachesEnd ? "1" : "0");
         if (_liveCache.TryGetValue(key, out var cached)) return cached;
         _compositionBefore = before;
+        (_compositionAfter, _compositionAfterReachesEnd) = (after, reachesEnd);
         var converted = string.Concat(ConvertJapanese(kana).Select(c => c.Text));
         _compositionBefore = "";
+        (_compositionAfter, _compositionAfterReachesEnd) = ("", true);
         if (_liveCache.Count > 256) _liveCache.Clear();
         _liveCache[key] = converted;
         return converted;
@@ -2611,6 +2678,13 @@ public sealed class CompositionController
         {
             var clauses = _clauses.Count > 0 ? "　文節 " + string.Join(" | ", _clauses.Select(c => $"{c.Reading}→{c.Text}")) : "";
             if (Diagnostics.Log.RecordText) Diagnostics.Log.Info($"確定の内訳: 打った英字「{_text.Raw}」　読み「{_text.AllKana(final: true)}」{clauses}");
+        }
+        // 変換エンジンに文脈が届いているかを、実際の使い方で確かめられるようにする (文字そのものは出さず、長さだけ)。
+        // 0 文字が続くアプリは、入力欄の文字を読めていない。
+        if (_contextStats is var (contextBefore, contextAfter))
+        {
+            Diagnostics.Log.Info($"変換エンジンに渡した文脈: 前 {contextBefore} 文字、後ろ {contextAfter} 文字");
+            _contextStats = null;
         }
         _text.Clear();
         _converting = false;

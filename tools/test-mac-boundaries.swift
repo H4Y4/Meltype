@@ -7,7 +7,7 @@ import InputMethodKit
 // テストだけの変換スタブ。実際の NativeCore / InputController / KeyMapping と一緒にコンパイルする。
 final class MeltypeConverter {
     static let shared = MeltypeConverter()
-    func clauses(for text: String, context: String?) -> [(reading: String, text: String)] { [] }
+    func clauses(for text: String, context: String?, following: String? = nil) -> [(reading: String, text: String)] { [] }
     func candidates(for text: String) -> [String] { [] }
 }
 var candidatesWindow: IMKCandidates? = nil

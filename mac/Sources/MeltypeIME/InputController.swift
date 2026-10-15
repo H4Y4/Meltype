@@ -25,6 +25,20 @@ final class MeltypeInputController: IMKInputController {
     override func activateServer(_ sender: Any!) {
         super.activateServer(sender)
         NativeCore.shared.setCodeInput(session, codeInput)
+        applyLatinKeyboardLayout(to: sender)
+    }
+
+    /// 設定「英字のレイアウト」(config.json の LatinKeyboardLayout) があれば、キーを文字にする配列をそれにする
+    /// (macOS の日本語入力の「英字のレイアウト」と同じ)。指定が無ければ何もせず、macOS が最後に使った英字の配列のまま。
+    /// Mac に入っていない配列の名前は無視する。
+    private func applyLatinKeyboardLayout(to sender: Any!) {
+        guard let layout = NativeCore.shared.latinKeyboardLayout(session), let client = sender as? IMKTextInput else { return }
+        let filter = [kTISPropertyInputSourceID as String: layout, kTISPropertyInputSourceType as String: kTISTypeKeyboardLayout as String]
+        guard let found = TISCreateInputSourceList(filter as CFDictionary, true)?.takeRetainedValue(), CFArrayGetCount(found) > 0 else {
+            NSLog("Meltype: 英字のレイアウト %@ は、この Mac に入っていないので使いません", layout)
+            return
+        }
+        client.overrideKeyboard(withKeyboardNamed: layout)
     }
 
     override init!(server: IMKServer!, delegate: Any!, client inputClient: Any!) {
