@@ -8,8 +8,11 @@ namespace Meltype.Composition;
 /// <summary>マウスボタンの押下/解放 (変換中にクリックされたとき、確定してからクリックを再生するため)。</summary>
 public readonly record struct MouseButtonEvent(int Message, int X, int Y, uint MouseData);
 
-/// <summary>フックから変換ボックスへ渡す入力。キーかマウスボタンのどちらか。</summary>
-public readonly record struct CapturedInput(KeyEvent? Key, MouseButtonEvent? Mouse);
+/// <summary>
+/// フックから変換ボックスへ渡す入力。キーかマウスボタンのどちらか。
+/// Delivered は、握りつぶさずにアプリへ通したキー (変換ボックスの側は、押していることを知るだけで送り直さない)。
+/// </summary>
+public readonly record struct CapturedInput(KeyEvent? Key, MouseButtonEvent? Mouse, bool Delivered = false);
 
 /// <summary>
 /// フック側の関所。変換ボックスが開いている間 (captured) は、届いたキーとマウスボタンを
@@ -51,6 +54,21 @@ public sealed class CaptureGate
                 _captured = true;
                 _queue.Enqueue(new CapturedInput(e, null));
             }
+        }
+        _signal();
+        return true;
+    }
+
+    /// <summary>
+    /// 関所が閉じている間に、握りつぶさずにアプリへ通すキー (Windows の、指で押した Ctrl)。変換ボックスの側でも押していることが
+    /// 分かるように、順番どおりキューに積む。関所が開いていれば何もせず false。
+    /// </summary>
+    public bool OnPassedKey(KeyEvent e)
+    {
+        lock (_gate)
+        {
+            if (!_captured) return false;
+            _queue.Enqueue(new CapturedInput(e, null, Delivered: true));
         }
         _signal();
         return true;

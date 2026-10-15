@@ -214,6 +214,9 @@ internal static class CompositionTests
         /// <summary>英数 (直接入力) 状態か。</summary>
         public bool Direct { get; set; }
 
+        /// <summary>Windows のフックと同じく、指で押した Ctrl を変換中も握りつぶさずにアプリへ通すか (CaptureGate.OnPassedKey)。</summary>
+        public bool PassControl { get; set; }
+
         /// <summary>先頭か空白の直後の / $ @ で始まる語をそのまま入力するか (設定の SigilWordsDirect)。</summary>
         public bool SigilWords { get; set; } = true;
 
@@ -295,7 +298,8 @@ internal static class CompositionTests
             if (vk == VirtualKeys.LControl) _ctrlHeld = !up;
             if (vk == VirtualKeys.LShift) _shiftHeld = !up;
             if (Direct && !up && !VirtualKeys.IsLetter(vk) && !VirtualKeys.IsModifier(vk)) _directEnglishWord = false;
-            var swallowed = Gate.OnKey(e, Starts);
+            // Windows のフック (MeltypeEngine) と同じく、指で押した Ctrl は変換中も握りつぶさずに通す
+            var swallowed = !(PassControl && IsControlKey(vk) && Gate.OnPassedKey(e)) && Gate.OnKey(e, Starts);
             if (!swallowed) Host.Events.Add($"{(up ? "passed-up" : "passed")}:{vk:X2}");
             if (!swallowed && IsControlKey(vk)) _ctrlSeenByApp = !up;
             if (!swallowed && !up)
@@ -1528,6 +1532,57 @@ internal static class CompositionTests
             Assert.True(!k.Host.Events.Any(e => e is "down:4D" or "passed:4D" or "down:0D" or "passed:0D"),
                 $"変換中 {converting}: M・Enter をアプリに送らない: " + string.Join(" ", k.Host.Events));
         }
+    }
+
+    [Test]
+    public static void PassedControl_ShortcutsWorkWhileCtrlReachesApp()
+    {
+        // Windows: 指で押した Ctrl は変換中も握りつぶさずにアプリ (と後ろのフック: AutoHotkey) へ通す。入力中の Ctrl+キーの割り当ては
+        // 今までどおり効き、確定した後に Ctrl を送り直さない (送り直した Ctrl は AutoHotkey から見て指で押したものではなく、
+        // ^h::Send "{BS}" の後に押し直されないので、続けて押した H が h として入っていた)
+        foreach (var style in new[] { Meltype.Config.ControlKeyStyle.Atok, Meltype.Config.ControlKeyStyle.Mac })
+        {
+            var k = new Keyboard { ControlKeys = style, PassControl = true };
+            k.Type("aiueo");
+            k.Key(VirtualKeys.LControl);
+            Assert.True(k.Host.Events.Contains("passed:A2"), $"{style}: Ctrl はアプリに通す: " + string.Join(" ", k.Host.Events));
+            k.Press(style == Meltype.Config.ControlKeyStyle.Mac ? 'K' : 'I');
+            Assert.Equal("アイウエオ", k.Showing, $"{style}: カタカナ");
+            k.Press('H');
+            Assert.Equal("アイウエ", k.Showing, $"{style}: Ctrl+H は BackSpace");
+            if (style == Meltype.Config.ControlKeyStyle.Mac) k.Press('M');
+            else
+            {
+                k.Key(VirtualKeys.LControl, up: true);
+                k.Press(VirtualKeys.Return);
+                k.Key(VirtualKeys.LControl);
+            }
+            Assert.Equal("アイウエ", k.Host.Document, $"{style}: 確定");
+            k.Press('H');
+            k.Press('H');
+            Assert.Equal(null, k.Showing, $"{style}: 確定した後の Ctrl+H を変換ボックスに入れない");
+            Assert.Equal(2, k.Host.Events.Count(e => e == "passed:48"), $"{style}: Ctrl+H はアプリに通す: " + string.Join(" ", k.Host.Events));
+            Assert.True(!k.Host.Events.Any(e => e is "down:A2" or "up:A2"), $"{style}: Ctrl を送り直さない: " + string.Join(" ", k.Host.Events));
+            k.Key(VirtualKeys.LControl, up: true);
+            Assert.Equal("passed-up:A2", k.Host.Events[^1]);
+            k.Type("ka");
+            Assert.Equal("か", k.Showing, $"{style}: Ctrl を離した後は普通に打てる");
+        }
+    }
+
+    [Test]
+    public static void PassedControl_OtherShortcutCommitsThenSendsKey()
+    {
+        // Ctrl は先にアプリへ届いているので、割り当ての無い Ctrl+C は確定してから C だけを送る (アプリには Ctrl+C として届く)
+        var k = new Keyboard { PassControl = true };
+        k.Type("kana");
+        k.Key(VirtualKeys.LControl);
+        k.Press('C');
+        k.Key(VirtualKeys.LControl, up: true);
+        var events = string.Join("|", k.Host.Events);
+        Assert.True(events.Contains("passed:A2|text:かな|down:43"), events);
+        Assert.True(!k.Host.Events.Contains("down:A2"), "Ctrl を送り直さない: " + events);
+        Assert.True(!k.Gate.IsCaptured, "ショートカットの後は横取りをやめる");
     }
 
     [Test]

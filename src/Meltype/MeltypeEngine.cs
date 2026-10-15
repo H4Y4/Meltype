@@ -120,6 +120,7 @@ internal sealed class MeltypeEngine : ISessionEnvironment, IDisposable
         _composition = composition;
         composition.PasteCommit = () => PastePolicy.ShouldPaste(_settings, _foreground.Current.ProcessName, IsQt(_foreground.Current.Window));
         composition.InputAllowed = () => KeyboardLayoutPolicy.AllowsInput(_settings);
+        composition.PhysicallyHeld = _heldModifiers.IsHeld;
         composition.Focus.TreatsAsTextInput = () => _settings.TreatsAsTextInput(_foreground.Current.ProcessName)
             || LineContext.TerminalProcesses.Contains(_foreground.Current.ProcessName);
         composition.Focus.TreatsWindowAsTextInput = () => WindowInputApps.Contains(_foreground.Current.ProcessName);
@@ -302,6 +303,10 @@ internal sealed class MeltypeEngine : ISessionEnvironment, IDisposable
         if (_keyboardDirect && e.IsDown && !VirtualKeys.IsLetter(e.Vk) && !VirtualKeys.IsModifier(e.Vk))
             _directEnglishWord = !e.Injected && KeyText.CharFromKey(e.Vk, e.Scan, false) is '@' or '_';
         if (HandleSnippetKey(composition, settings, e)) return true;
+        // 指で押した Ctrl は、変換中でも握りつぶさずにアプリへ通す (変換ボックスの側にも順番どおり伝える)。握りつぶすと、Meltype より
+        // 後ろでキーを受け取るソフト (AutoHotkey の Emacs 風の割り当て) が、Ctrl を指で押していることを知らない。確定した後に Meltype が
+        // Ctrl を送り直しても、ほかのソフトが送ったキーとみなされ、^h::Send "{BS}" の後に Ctrl が押し直されず、続けて押した H が h として入っていた
+        if (!e.Injected && e.Vk is VirtualKeys.LControl or VirtualKeys.RControl && composition.Gate.OnPassedKey(e)) return false;
         var swallowed = composition.Gate.OnKey(e, StartsComposition);
         // Meltype を通らずにアプリへ届いたキーはキャレットを動かすかもしれない。直前の語を確定し直さないようにする。
         if (!swallowed && e.IsDown && !VirtualKeys.IsModifier(e.Vk)) composition.ForgetLastCommit();

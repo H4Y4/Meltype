@@ -338,8 +338,25 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
             inputs.Add(UnicodeInput(c, up: false));
             inputs.Add(UnicodeInput(c, up: true));
         }
-        var array = inputs.ToArray();
-        Native.SendAll(array, "確定文字列の入力");
+        Native.SendAll(WithoutControl(inputs), "確定文字列の入力");
+    }
+
+    /// <summary>指で押しているキー (LControl など) か。フックで追いかけている物理キーの状態 (MeltypeEngine が設定する)。</summary>
+    public Func<int, bool>? PhysicallyHeld { get; set; }
+
+    /// <summary>
+    /// 文字・BackSpace を送るとき、アプリに Ctrl が押されたまま届いていれば (フックは指で押した Ctrl を変換中も通す)、その間だけ離したことにする。
+    /// Ctrl を押したままだと、Chrome などは文字を入れず、BackSpace は単語ごと消す。送ったあとも指で押していれば押し直す (続けて打つ Ctrl+キーのため)。
+    /// </summary>
+    private Native.INPUT[] WithoutControl(List<Native.INPUT> inputs)
+    {
+        var down = new[] { VirtualKeys.LControl, VirtualKeys.RControl }.Where(vk => (Native.GetAsyncKeyState(vk) & 0x8000) != 0).ToList();
+        if (down.Count == 0) return inputs.ToArray();
+        var wrapped = new List<Native.INPUT>(inputs.Count + down.Count * 2);
+        wrapped.AddRange(down.Select(vk => KeyInput(vk, up: true)));
+        wrapped.AddRange(inputs);
+        wrapped.AddRange(down.Where(vk => PhysicallyHeld?.Invoke(vk) != false).Select(vk => KeyInput(vk, up: false)));
+        return wrapped.ToArray();
     }
 
     private DataObject? _savedClipboard;
@@ -471,13 +488,13 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
         // Microsoft IME が ON のままだと、BackSpace と後から送る文字の順番が入れ替わることがある (issue #227: wanI t)
         EnsureSystemImeClosed();
         for (var i = 0; i < count; i++) KeyReplayed?.Invoke(new KeyEvent(VirtualKeys.Back, 0, false, false, false, 0));
-        var events = new List<KeyEvent>(count * 2);
+        var inputs = new List<Native.INPUT>(count * 2);
         for (var i = 0; i < count; i++)
         {
-            events.Add(new KeyEvent(VirtualKeys.Back, 0, false, false, false, 0));
-            events.Add(new KeyEvent(VirtualKeys.Back, 0, false, true, false, 0));
+            inputs.Add(KeyInput(VirtualKeys.Back, up: false));
+            inputs.Add(KeyInput(VirtualKeys.Back, up: true));
         }
-        _injector.Inject(events);
+        Native.SendAll(WithoutControl(inputs), "BackSpace");
     }
 
     /// <summary>
@@ -529,7 +546,7 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
             inputs.Add(UnicodeInput(c, up: false));
             inputs.Add(UnicodeInput(c, up: true));
         }
-        Native.SendAll(inputs.ToArray(), "確定し直し");
+        Native.SendAll(WithoutControl(inputs), "確定し直し");
     }
 
     public void RequestSurroundingText(Action<string?, string?> callback)
@@ -801,7 +818,7 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
 
     private static bool IsOnScreen(Rectangle bounds) => Screen.AllScreens.Any(s => s.Bounds.IntersectsWith(bounds));
 
-    /// <summary>仮想キーの打鍵 (確定し直しの BackSpace)。KeyInjector と同じく、Meltype が送ったキーの印を付ける。</summary>
+    /// <summary>仮想キーの打鍵 (確定し直しの BackSpace・文字を送る間の Ctrl)。KeyInjector と同じく、Meltype が送ったキーの印を付ける。</summary>
     private static Native.INPUT KeyInput(int vk, bool up) => new()
     {
         type = Native.INPUT_KEYBOARD,
@@ -810,7 +827,8 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
             ki = new Native.KEYBDINPUT
             {
                 wVk = (ushort)vk,
-                dwFlags = up ? Native.KEYEVENTF_KEYUP : 0,
+                // 右 Ctrl は拡張キー (付けないと左 Ctrl として届く)
+                dwFlags = (up ? Native.KEYEVENTF_KEYUP : 0) | (vk == VirtualKeys.RControl ? Native.KEYEVENTF_EXTENDEDKEY : 0),
                 dwExtraInfo = KeyboardMonitor.InjectedMarker,
             },
         },

@@ -282,6 +282,8 @@ public sealed class CompositionController
     private readonly Dictionary<string, string> _liveCache = new(StringComparer.Ordinal);
     private readonly HashSet<int> _swallowedShift = [];
     private readonly HashSet<int> _swallowedControl = [];
+    // 握りつぶさずにアプリへ通してある Ctrl (Windows のフックは、指で押した Ctrl を変換中でも通す: CaptureGate.OnPassedKey)
+    private readonly HashSet<int> _deliveredControl = [];
     private readonly HashSet<int> _replayedDown = [];
     private readonly HashSet<int> _capturedDown = [];
     private List<Clause> _clauses = [];
@@ -368,7 +370,8 @@ public sealed class CompositionController
         {
             while (_gate.TryDequeue(out var input))
             {
-                if (input.Key is { } key) HandleKey(key);
+                if (input.Key is { } key && input.Delivered) OnDeliveredKey(key);
+                else if (input.Key is { } typed) HandleKey(typed);
                 else if (input.Mouse is { } mouse) HandleMouse(mouse);
             }
             UpdateView();
@@ -396,6 +399,7 @@ public sealed class CompositionController
                 // 以降のキーアップはフックを素通りしてアプリに直接届くので、追跡をやめる。
                 _swallowedShift.Clear();
                 _swallowedControl.Clear();
+                _deliveredControl.Clear();
                 _replayedDown.Clear();
                 _capturedDown.Clear();
                 return;
@@ -487,6 +491,7 @@ public sealed class CompositionController
         ClearHeld();
         _swallowedShift.Clear();
         _swallowedControl.Clear();
+        _deliveredControl.Clear();
         _replayedDown.Clear();
         _capturedDown.Clear();
     }
@@ -546,6 +551,22 @@ public sealed class CompositionController
         _swallowedControl.Clear();
         _correctable.Clear();
         _host.Replay(e);
+    }
+
+    /// <summary>
+    /// 握りつぶさずにアプリへ通したキー (Windows の、指で押した Ctrl)。押している間の Ctrl+キーの割り当てに使うだけで、送り直さない。
+    /// </summary>
+    private void OnDeliveredKey(KeyEvent e)
+    {
+        if (!IsControl(e.Vk)) return;
+        if (e.IsUp)
+        {
+            _deliveredControl.Remove(e.Vk);
+            return;
+        }
+        // 英数状態で判定中の語は、Ctrl (ショートカット) で打ち切る (握りつぶしていたときと同じ)
+        if (_heldLetters.Length > 0) ReleaseHeldAsEnglish();
+        _deliveredControl.Add(e.Vk);
     }
 
     private void HandleKey(KeyEvent e)
@@ -608,7 +629,7 @@ public sealed class CompositionController
             _swallowedControl.Add(vk);
             return;
         }
-        if (_swallowedControl.Count > 0)
+        if (_swallowedControl.Count > 0 || _deliveredControl.Count > 0)
         {
             if (!_text.IsEmpty && ControlShortcut(e) is { } action)
             {
