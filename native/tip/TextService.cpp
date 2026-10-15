@@ -418,6 +418,14 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* focus, ITfDocumentMgr*) {
     caretMoved_ = true;
     ForgetSecretField();
     if (candidates_) candidates_->Hide();
+    // 調べるとき用: アプリが TSF に入力欄 (文書) を渡していないと、キーは IME に届かずにアプリへそのまま入る
+    // (ウィンドウにはフォーカスがあるのに、日本語にならずに英字が入る)。入力欄が無くなった・戻ったときだけ書く
+    Microsoft::WRL::ComPtr<ITfContext> top;
+    bool missing = focus == nullptr || FAILED(focus->GetTop(&top)) || !top;
+    if (missing != focusMissing_) {
+        focusMissing_ = missing;
+        TipLog(missing ? L"フォーカス: 入力欄なし (TSF の文書が無いので、キーは IME を通らずにアプリへ入ります)" : L"フォーカス: 入力欄あり");
+    }
     AdviseTextEditSink(focus);
     if (!disabled_) Hello();
     return S_OK;
