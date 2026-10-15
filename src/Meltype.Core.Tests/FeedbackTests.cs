@@ -649,6 +649,40 @@ internal static class CodeProfileTests
     }
 
     [Test]
+    public static void Settings_UniformInputIgnoresAppAndEnvironment()
+    {
+        // 要望: ターミナル (Claude Code の CLI) でも日本語を打ちたい。アプリや環境で勝手に動作を変えず、どこでも同じ入力にする設定を 1 つで。
+        var settings = new Settings
+        {
+            AppKinds = [new AppKind { Name = "チャット", Base = AppProfile.General, DetectionLevel = DetectionLevel.Aggressive, LiveConversion = false, StartInEnglish = true },
+                        new AppKind { Name = "自作ゲーム", Base = AppProfile.Game }],
+        };
+        settings.AppRules.Add(new AppRule { Process = "WindowsTerminal.exe", Enabled = false, Profile = AppProfile.Code });
+        settings.AppRules.Add(new AppRule { Process = "Discord.exe", Kind = "チャット" });
+        settings.AppRules.Add(new AppRule { Process = "mygame.exe", Kind = "自作ゲーム" });
+        settings.AppRules.Add(new AppRule { Process = "game.exe", Profile = AppProfile.Game });
+        settings.Normalize();
+        Assert.True(!settings.UniformInput, "既定は OFF (今までどおり)");
+        Assert.True(!settings.IsAppEnabled("WindowsTerminal.exe") && settings.StopsInFullscreen() && settings.IsGame("steamgame.exe", looksLikeGame: true), "OFF ならアプリ別設定・全画面・ゲームの判定を使う");
+
+        settings.UniformInput = true;
+        Assert.True(settings.IsAppEnabled("WindowsTerminal.exe"), "アプリ別設定で OFF にしたターミナルでも使う");
+        Assert.True(settings.IsAppEnabled("mstsc.exe"), "既定で OFF のリモート デスクトップでも使う");
+        Assert.Equal(AppProfile.General, settings.ProfileFor("WindowsTerminal.exe"), "コードのアプリも一般");
+        Assert.Equal(AppProfile.General, settings.ProfileFor("game.exe"), "種類「ゲーム」も一般");
+        Assert.Equal(AppProfile.General, settings.ProfileFor("mygame.exe"), "ゲームを元にした独自の種類も一般");
+        Assert.True(!settings.IsGame("game.exe", looksLikeGame: false) && !settings.IsGame("steamgame.exe", looksLikeGame: true), "ゲームでも止めない");
+        Assert.True(!settings.StopsInFullscreen(), "全画面でも止めない");
+        Assert.True(settings.KindFor("Discord.exe") is null && ReferenceEquals(settings, settings.ForApp("Discord.exe")), "独自の種類を使わない");
+        Assert.True(settings.Clone().IsAppEnabled("WindowsTerminal.exe"), "複製しても ON を保つ");
+
+        settings.UniformInput = false;
+        Assert.True(!settings.IsAppEnabled("WindowsTerminal.exe"), "OFF に戻せば元どおり (アプリ別設定は消えない)");
+        Assert.Equal(AppProfile.Game, settings.ProfileFor("game.exe"));
+        Assert.Equal("チャット", settings.KindFor("Discord.exe")?.Name);
+    }
+
+    [Test]
     public static void Settings_CustomAppKinds()
     {
         // 報告: アプリ別設定の種類を、一般とコードだけでなく自分で作れるように。

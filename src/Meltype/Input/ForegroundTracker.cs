@@ -90,7 +90,7 @@ internal sealed class ForegroundTracker
         // 権限の高いアプリには SendInput が届かず (UIPI)、保留した入力を失うおそれがある。
         if (app.IsElevated != false && !SelfElevated) return CollectPermission.Deny($"{app.ProcessName} は管理者権限で動作中 (または権限を確認できない)");
         if (!settings.IsAppEnabled(app.ProcessName)) return CollectPermission.Deny($"{app.ProcessName} はアプリ別設定で OFF");
-        if (settings.ExcludeFullscreen && app.IsFullscreen) return CollectPermission.Deny($"{app.ProcessName} は全画面表示");
+        if (settings.StopsInFullscreen() && app.IsFullscreen) return CollectPermission.Deny($"{app.ProcessName} は全画面表示");
         if (settings.IsGame(app.ProcessName, app.LooksLikeGame)) return CollectPermission.Deny($"{app.ProcessName} はゲーム");
         return CollectPermission.Allow;
     }

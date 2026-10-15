@@ -632,6 +632,10 @@ public sealed class Settings
     [Category("6. IME"), DisplayName("IME 操作のタイムアウト (ms)")]
     public int ImeTimeoutMs { get; set; } = 300;
 
+    [Category("7. アプリ"), DisplayName("どのアプリでも同じ入力にする"),
+     Description("ON にすると、アプリや環境で動作を変えません。アプリ別設定 (自動切替の ON/OFF・種類「コード」「ゲーム」・独自の種類)、「全画面アプリでは無効」「ゲームでは止める」「アプリの種類で動作を変える」を使わず、ターミナル・コードエディター・全画面のアプリ・ゲームでも、ほかのアプリと同じように入力欄で日本語を判定します。アプリ別設定の中身は消えないので、OFF に戻せば元どおりです。")]
+    public bool UniformInput { get; set; }
+
     [Category("7. アプリ"), DisplayName("貼り付けで入力するアプリ"),
      Description("確定した文字を 1 文字ずつ送ると取り違えるアプリ (DaVinci Resolve で「あいうえお」→「あああああ」)。ここに書いたアプリ (プロセス名、カンマ区切り) では、クリップボードを使って貼り付けで入れます (元のクリップボードの中身は戻します)。Qt アプリはここに書かなくても自動で貼り付けになります。")]
     public string PasteApps { get; set; } = "Resolve.exe";
@@ -728,26 +732,32 @@ public sealed class Settings
         "maya.exe",
     ];
 
-    public bool IsAppEnabled(string? processName) => FindRule(processName)?.Enabled ?? true;
+    /// <summary>このアプリで Meltype を使うか (アプリ別設定の自動切替)。「どのアプリでも同じ入力にする」なら常に使う。</summary>
+    public bool IsAppEnabled(string? processName) => UniformInput || (FindRule(processName)?.Enabled ?? true);
+
+    /// <summary>全画面のウィンドウなので Meltype を止めるか (「全画面アプリでは無効」)。</summary>
+    public bool StopsInFullscreen() => ExcludeFullscreen && !UniformInput;
 
     /// <summary>
     /// ゲームとして Meltype を止めるか: アプリ別設定の種類が「ゲーム」か、アプリ別設定が無く、ゲームのフォルダーにあるアプリ (looksLikeGame) で「ゲームでは止める」が ON。
+    /// 「どのアプリでも同じ入力にする」なら止めない。
     /// </summary>
     public bool IsGame(string? processName, bool looksLikeGame) =>
-        ProfileFor(processName) == AppProfile.Game || (StopInGames && looksLikeGame && FindRule(processName) is null);
+        !UniformInput && (ProfileFor(processName) == AppProfile.Game || (StopInGames && looksLikeGame && FindRule(processName) is null));
 
     /// <summary>
     /// アプリの種類 (アプリ別設定に無ければ一般)。独自の種類なら、その元にした種類。
-    /// 「アプリの種類で動作を変える」が OFF なら、ゲーム (Meltype を止める) 以外はすべて一般。
+    /// 「アプリの種類で動作を変える」が OFF なら、ゲーム (Meltype を止める) 以外はすべて一般。「どのアプリでも同じ入力にする」なら、すべて一般。
     /// </summary>
     public AppProfile ProfileFor(string? processName)
     {
+        if (UniformInput) return AppProfile.General;
         var profile = AssignedKind(processName)?.Base ?? FindRule(processName)?.Profile ?? AppProfile.General;
         return AppKindsEnabled || profile == AppProfile.Game ? profile : AppProfile.General;
     }
 
-    /// <summary>アプリに割り当てた独自の種類 (無ければ null)。「アプリの種類で動作を変える」が OFF なら null。</summary>
-    public AppKind? KindFor(string? processName) => AppKindsEnabled ? AssignedKind(processName) : null;
+    /// <summary>アプリに割り当てた独自の種類 (無ければ null)。「アプリの種類で動作を変える」が OFF か、「どのアプリでも同じ入力にする」なら null。</summary>
+    public AppKind? KindFor(string? processName) => AppKindsEnabled && !UniformInput ? AssignedKind(processName) : null;
 
     private AppKind? AssignedKind(string? processName) =>
         FindRule(processName)?.Kind is { Length: > 0 } name ? AppKinds.FirstOrDefault(k => k.Name == name) : null;
