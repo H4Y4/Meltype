@@ -321,6 +321,14 @@ public sealed class Settings
      Description("ここに書いた記号は、日本語入力で打ったとき、いつも半角 (打ったまま) にします (例: <>` と書くと、日本語の中でも < > ` が半角に。[] と書くと「」ではなく [ ] に)。書いていない記号は今までどおりです。- , . / は書いても変わりません (長音・句読点・中黒の設定を使います)。")]
     public string HalfWidthSymbols { get; set; } = "";
 
+    [Category("1. 全般"), DisplayName("- を長音 (ー) にするのは、かなの後ろだけ"),
+     Description("ON にすると、日本語入力で打った - を長音の「ー」にするのは、かなのすぐ後ろ (らーめん、こーひー) だけにします。打ち始め・記号や英字の後ろでは半角の - のままです (- 箇条書き、->、--)。OFF なら今までどおり、日本語の中ではいつも「ー」です。")]
+    public bool LongVowelOnlyAfterKana { get; set; }
+
+    [Category("1. 全般"), DisplayName("記号だけ打って Space で、確定して空白"),
+     Description("ON にすると、「全角にする記号」「半角にする記号」に書いた記号 (と、半角にした -) だけを打って Space を押したとき、候補を開かずにそのまま確定して空白を入れます (# 見出し、- 箇条書き、> 引用)。OFF なら今までどおり、全角・半角の候補を開きます。")]
+    public bool SpaceCommitsSymbols { get; set; }
+
     [Category("1. 全般"), DisplayName("¥ キーで入力する文字"),
      Description("¥ キーと \\ キーで入れる文字です (Mac の日本語入力の「\"¥\" キーで入力する文字」と同じ)。「¥ (円記号)」は今までどおりで、日本語の中で打った \\ は全角の ￥ になります。「\\ (バックスラッシュ)」にすると、どちらのキーも半角の \\ を入れます (Mac の JIS 配列の ¥ キーも \\ になり、英数 (直接入力) のときにも効きます)。Windows の ¥ キーはもともと \\ の文字なので、変わるのは日本語の中で全角の ￥ にしなくなる点だけです。")]
     public YenKeyStyle YenKey { get; set; } = YenKeyStyle.Yen;
@@ -912,6 +920,29 @@ public sealed class Settings
             try { File.Copy(path, path + ".broken", overwrite: true); } catch { }
             Diagnostics.Log.Warn($"config.json を読み込めなかったため既定値を使います: {ex.Message}");
             return new Settings();
+        }
+    }
+
+    /// <summary>
+    /// 動いている間に書き換えられた config.json を読み直す。読めなければ null (前の設定のまま使う)。
+    /// <see cref="Load"/> と違い、読めなくても .broken に退避せず、移行した設定も保存しない (書いている途中のファイルを読むことがあるため)。
+    /// ファイルが無ければ既定値。
+    /// </summary>
+    public static Settings? TryReload(string path)
+    {
+        try
+        {
+            if (!File.Exists(path)) return new Settings();
+            var json = File.ReadAllText(path);
+            var settings = JsonSerializer.Deserialize(json, JsonType) ?? new Settings();
+            if (!json.Contains(nameof(SettingsVersion))) settings.SettingsVersion = 1;
+            settings.Migrate();
+            return settings.Normalize();
+        }
+        catch (Exception ex)
+        {
+            Diagnostics.Log.Warn($"書き換えられた config.json を読めなかったので、前の設定のまま使います: {ex.Message}");
+            return null;
         }
     }
 

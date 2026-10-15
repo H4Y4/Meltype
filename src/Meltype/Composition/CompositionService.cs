@@ -75,6 +75,8 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
             SlashAsMiddleDot = options.SlashAsMiddleDot,
             FullWidthSymbols = options.FullWidthSymbols,
             HalfWidthSymbols = options.HalfWidthSymbols,
+            LongVowelOnlyAfterKana = options.LongVowelOnlyAfterKana,
+            SpaceCommitsSymbols = options.SpaceCommitsSymbols,
             YenKey = options.YenKey,
             SpaceAroundEnglish = options.SpaceAroundEnglish,
             Punctuation = options.Punctuation,

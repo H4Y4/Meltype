@@ -257,6 +257,17 @@ public sealed class CompositionText
     /// <summary>いつも半角 (打ったまま) にする記号 (設定)。両方に書いた記号は半角にする。</summary>
     public Func<string> HalfWidthSymbols { get; set; } = () => "";
 
+    /// <summary>- を長音 (ー) にするのは、かなのすぐ後ろだけにするか (設定)。OFF なら日本語の中ではいつも「ー」。</summary>
+    public Func<bool> LongVowelOnlyAfterKana { get; set; } = () => false;
+
+    /// <summary>
+    /// 設定で幅を決めた記号 (と、設定で半角にした -) だけを打ったか (# - > など)。
+    /// 設定「記号だけ打って Space で、確定して空白」で、Space を変換ではなく確定 + 空白にする場面。
+    /// </summary>
+    public bool IsOnlyFixedWidthSymbols =>
+        !KanaInput && Mode == DisplayMode.Auto && _pending.Length == 0 && _units.Count > 0 && _units.All(unit => unit.Raw is [var c] &&
+            (c == '-' ? unit.Kana == "-" : SymbolWidth.IsHalfWidth(HalfWidthSymbols(), c) || SymbolWidth.IsFullWidth(FullWidthSymbols(), HalfWidthSymbols(), c)));
+
     /// <summary>設定で全角に決めて、全角で入っている記号の単位か (パスの中の括弧は半角で入っているので違う)。</summary>
     private bool IsFixedFullWidth(CompositionUnit unit) =>
         unit.Raw is [var c] && unit.Kana != unit.Raw && SymbolWidth.IsFullWidth(FullWidthSymbols(), HalfWidthSymbols(), c);
@@ -748,7 +759,7 @@ public sealed class CompositionText
         if (partial)
         {
             // 構造の境界がローマ字単位の途中に入った場合だけ、その区間の原文を読み直す。
-            var fragment = new CompositionText(_detector) { FullWidthSymbols = FullWidthSymbols, HalfWidthSymbols = HalfWidthSymbols, YenKey = YenKey };
+            var fragment = new CompositionText(_detector) { FullWidthSymbols = FullWidthSymbols, HalfWidthSymbols = HalfWidthSymbols, LongVowelOnlyAfterKana = LongVowelOnlyAfterKana, YenKey = YenKey };
             foreach (var c in Raw[from..to]) fragment.Append(c);
             pending = fragment.Pending;
             return [.. fragment.Units];
@@ -1296,6 +1307,14 @@ public sealed class CompositionText
         return DefaultSymbol(c);
     }
 
+    /// <summary>
+    /// 日本語の中で打った - の文字。ふつうは長音の「ー」。設定「- を長音にするのは、かなの後ろだけ」が ON なら、
+    /// かな (と ー) のすぐ後ろ以外 (打ち始め・記号や英字の後ろ) は半角の - (- 箇条書き、->、--)。
+    /// </summary>
+    private char Hyphen() =>
+        !LongVowelOnlyAfterKana() || _units.Count > 0 && _units[^1].Kana is [.., var kana] && kana is >= 'ぁ' and <= 'ゖ' or >= 'ァ' and <= 'ヺ' or 'ー'
+            ? 'ー' : '-';
+
     /// <summary>記号の全角の形。' " \ は、既定で全角にするときと同じ ’ ” ￥。</summary>
     private static char FullWidth(char c) => c switch
     {
@@ -1307,7 +1326,7 @@ public sealed class CompositionText
 
     private char DefaultSymbol(char c) => c switch
     {
-        '-' => 'ー',
+        '-' => Hyphen(),
         // 句読点は設定の組み合わせ (、。 / ，． / ，。 / 、．)。
         ',' => Comma,
         '.' => Period,

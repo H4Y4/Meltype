@@ -193,6 +193,12 @@ public sealed record CompositionOptions
     /// <summary>いつも半角にする記号 (設定)。</summary>
     public Func<string> HalfWidthSymbols { get; init; } = () => "";
 
+    /// <summary>- を長音 (ー) にするのは、かなのすぐ後ろだけにするか (設定)。</summary>
+    public Func<bool> LongVowelOnlyAfterKana { get; init; } = () => false;
+
+    /// <summary>幅を決めた記号だけを打って Space を押したら、確定して空白を入れるか (設定)。</summary>
+    public Func<bool> SpaceCommitsSymbols { get; init; } = () => false;
+
     /// <summary>¥ キー・\ キーで入れる文字 (設定)。</summary>
     public Func<Config.YenKeyStyle> YenKey { get; init; } = () => Config.YenKeyStyle.Yen;
 
@@ -361,6 +367,7 @@ public sealed class CompositionController
         _text.SlashAsMiddleDot = () => _options.SlashAsMiddleDot();
         _text.FullWidthSymbols = () => _options.FullWidthSymbols();
         _text.HalfWidthSymbols = () => _options.HalfWidthSymbols();
+        _text.LongVowelOnlyAfterKana = () => _options.LongVowelOnlyAfterKana();
         _text.YenKey = () => _options.YenKey();
     }
 
@@ -705,6 +712,12 @@ public sealed class CompositionController
             case VirtualKeys.Space:
                 // 保護区間 (メンション・URL・パス) の末尾は、自動変換せず原文のまま + 半角空白で確定する。
                 if (IsProtectedInput) { CommitProtected(" "); return; }
+                // 設定「記号だけ打って Space で、確定して空白」: 幅を決めた記号だけなら、候補を開かずに確定して空白を入れる (# 見出し、- 箇条書き)。
+                if (_options.SpaceCommitsSymbols() && _text.IsOnlyFixedWidthSymbols)
+                {
+                    Commit(suffix: " ");
+                    return;
+                }
                 if (_text.PrecedingEnglish != true && PreviewCandidates() is not null)
                 {
                     SelectCandidate(0);
@@ -929,7 +942,7 @@ public sealed class CompositionController
         foreach (var word in text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
         {
             // 前の語が日本語でも「日本語の続き」とはしない (空白で区切って打った語なので、語の途中ではない)
-            var typed = new CompositionText(_detector) { PrecedingEnglish = previousEnglish == true ? true : null, Punctuation = _options.Punctuation(), FullWidthSymbols = _options.FullWidthSymbols, HalfWidthSymbols = _options.HalfWidthSymbols, YenKey = _options.YenKey };
+            var typed = new CompositionText(_detector) { PrecedingEnglish = previousEnglish == true ? true : null, Punctuation = _options.Punctuation(), FullWidthSymbols = _options.FullWidthSymbols, HalfWidthSymbols = _options.HalfWidthSymbols, LongVowelOnlyAfterKana = _options.LongVowelOnlyAfterKana, YenKey = _options.YenKey };
             foreach (var c in word) typed.Append(c);
             var segments = typed.Segments(final: true);
             foreach (var segment in segments)

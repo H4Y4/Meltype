@@ -192,6 +192,12 @@ internal static class CompositionTests
         /// <summary>いつも半角にする記号 (設定)。</summary>
         public string HalfWidthSymbols { get; set; } = "";
 
+        /// <summary>- を長音にするのは、かなの後ろだけにするか (設定)。</summary>
+        public bool LongVowelOnlyAfterKana { get; set; }
+
+        /// <summary>幅を決めた記号だけを打って Space で、確定して空白を入れるか (設定)。</summary>
+        public bool SpaceCommitsSymbols { get; set; }
+
         /// <summary>¥ キー・\ キーで入れる文字 (設定)。</summary>
         public Meltype.Config.YenKeyStyle YenKey { get; set; }
 
@@ -264,6 +270,8 @@ internal static class CompositionTests
                 SlashAsMiddleDot = () => slashAsMiddleDot,
                 FullWidthSymbols = () => FullWidthSymbols,
                 HalfWidthSymbols = () => HalfWidthSymbols,
+                LongVowelOnlyAfterKana = () => LongVowelOnlyAfterKana,
+                SpaceCommitsSymbols = () => SpaceCommitsSymbols,
                 YenKey = () => YenKey,
                 Now = now ?? (() => DateTime.Now),
                 ShowTypedKeys = () => showTypedKeys,
@@ -2559,6 +2567,66 @@ internal static class CompositionTests
         {
             Assert.Equal(keys.TrimEnd(), TypeWithSymbolWidths(keys, fullWidth: "'?=#@:"), "打ったまま: " + keys.TrimEnd());
         }
+    }
+
+    [Test]
+    public static void LongVowel_OnlyAfterKana()
+    {
+        // 設定「- を長音にするのは、かなの後ろだけ」。OFF (既定) は今までどおり、日本語の中ではいつも ー
+        string Type(string keys, bool on, string half = "")
+        {
+            var k = new Keyboard { LongVowelOnlyAfterKana = on, HalfWidthSymbols = half };
+            k.Type(keys);
+            return k.Host.Document;
+        }
+        foreach (var (keys, off, on) in new[]
+        {
+            ("ra-men\n", "らーめん", "らーめん"),
+            ("ko-hi-\n", "こーひー", "こーひー"),
+            ("hai-\n", "はいー", "はいー"),
+            ("su--pa-\n", "すーーぱー", "すーーぱー"),
+            ("-\n", "ー", "-"),
+            ("--\n", "ーー", "--"),
+            ("-1\n", "-1", "-1"),
+            ("2026-10-16\n", "2026-10-16", "2026-10-16"),
+        })
+        {
+            Assert.Equal(off, Type(keys, on: false), "OFF: " + keys.TrimEnd());
+            Assert.Equal(on, Type(keys, on: true), "ON: " + keys.TrimEnd());
+        }
+        Assert.Equal("ー＞", Type("->\n", on: false), "OFF: ->");
+        Assert.Equal("->", Type("->\n", on: true, half: ">"), "ON で > を半角にすれば ->");
+    }
+
+    [Test]
+    public static void SpaceCommitsSymbols_FollowsSetting()
+    {
+        // 設定「記号だけ打って Space で、確定して空白」。幅を決めた記号だけなら、候補を開かずに確定して空白を入れる
+        string Type(string keys, bool on, bool longVowel = true, string half = "#>*`", string full = "()")
+        {
+            var k = new Keyboard { SpaceCommitsSymbols = on, LongVowelOnlyAfterKana = longVowel, HalfWidthSymbols = half, FullWidthSymbols = full };
+            k.Type(keys);
+            return k.Host.Document;
+        }
+        foreach (var (keys, off, on) in new[]
+        {
+            ("# midasi\n", "#みだし", "# みだし"),
+            ("## midasi\n", "##みだし", "## みだし"),
+            ("> inyou\n", ">いにょう", "> いにょう"),
+            ("- item\n", "-item", "- item"),
+            ("* kore\n", "*これ", "* これ"),
+        })
+        {
+            Assert.Equal(off, Type(keys, on: false), "OFF: " + keys.TrimEnd());
+            Assert.Equal(on, Type(keys, on: true), "ON: " + keys.TrimEnd());
+        }
+        Assert.Equal("（ ", Type("( \n", on: true), "全角に決めた記号も同じ");
+        // 幅を決めていない記号・ー・記号の後ろにかななどがあるときは、今までどおり変換する
+        Assert.Equal("！", Type("! \n", on: true, half: ""), "幅を決めていない記号は今までどおり (候補を開き、最初の候補は ！)");
+        Assert.Equal("ー", Type("- \n", on: true, longVowel: false), "ー は今までどおり");
+        var k = new Keyboard { SpaceCommitsSymbols = true, HalfWidthSymbols = "#" };
+        k.Type("#kore ");
+        Assert.True(k.Host.View is { Converting: true }, "記号の後ろにかながあれば変換する");
     }
 
     [Test]

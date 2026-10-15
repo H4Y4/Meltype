@@ -69,6 +69,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
             SlashAsMiddleDot = () => _engine.Settings.SlashAsMiddleDot,
             FullWidthSymbols = () => _engine.Settings.FullWidthSymbols,
             HalfWidthSymbols = () => _engine.Settings.HalfWidthSymbols,
+            LongVowelOnlyAfterKana = () => _engine.Settings.LongVowelOnlyAfterKana,
+            SpaceCommitsSymbols = () => _engine.Settings.SpaceCommitsSymbols,
             YenKey = () => _engine.Settings.YenKey,
             SpaceAroundEnglish = () => _engine.Settings.SpaceAroundEnglish,
             Punctuation = () => _engine.Settings.Punctuation,
