@@ -30,24 +30,31 @@ internal sealed class SettingsFile
 
     public string Path => _path;
 
-    /// <summary>今の設定。ファイルが書き換えられていれば読み直したもの。</summary>
+    /// <summary>今の設定。ファイルが書き換えられていれば読み直したもの (調べるのは checkIntervalMs に 1 回まで)。</summary>
     public Settings Current
     {
         get
         {
             var now = _now();
-            if (now - _checkedAt < _checkIntervalMs) return _current;
-            _checkedAt = now;
-            var writeTime = WriteTime(_path);
-            if (writeTime == _writeTime) return _current;
-            if (Settings.TryReload(_path) is { } reloaded)
-            {
-                _current = reloaded;
-                _writeTime = writeTime;
-                Diagnostics.Log.Info("config.json が書き換えられたので読み直しました");
-            }
-            return _current;
+            return now - _checkedAt < _checkIntervalMs ? _current : Check(now);
         }
+    }
+
+    /// <summary>間隔を待たずに、書き換えられていないかを今調べる (入力欄を作るとき。書いた直後の設定で作る)。</summary>
+    public Settings Refresh() => Check(_now());
+
+    private Settings Check(long now)
+    {
+        _checkedAt = now;
+        var writeTime = WriteTime(_path);
+        if (writeTime == _writeTime) return _current;
+        if (Settings.TryReload(_path) is { } reloaded)
+        {
+            _current = reloaded;
+            _writeTime = writeTime;
+            Diagnostics.Log.Info("config.json が書き換えられたので読み直しました");
+        }
+        return _current;
     }
 
     private static DateTime WriteTime(string path)

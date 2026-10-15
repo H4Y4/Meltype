@@ -151,6 +151,10 @@ internal static class SettingsJsonTests
             Write("{ \"SettingsVersion\": 5, \"HalfWidthSymbols\": \"*>\" }", 30);
             now = 3000;
             Assert.Equal("*>", file.Current.HalfWidthSymbols, "書き終わったら読み直す");
+            // 入力欄を作るときは、間隔を待たずに調べる
+            Write("{ \"SettingsVersion\": 5, \"HalfWidthSymbols\": \"*>#\" }", 40);
+            Assert.Equal("*>", file.Current.HalfWidthSymbols, "間隔の中は調べない");
+            Assert.Equal("*>#", file.Refresh().HalfWidthSymbols, "Refresh はすぐ調べる");
         }
         finally { Directory.Delete(directory, recursive: true); }
     }

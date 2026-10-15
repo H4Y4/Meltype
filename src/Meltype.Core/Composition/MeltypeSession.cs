@@ -181,7 +181,7 @@ public sealed class MeltypeSession
         if (s_settingsFile?.Path != configPath) s_settingsFile = new SettingsFile(configPath);
         var file = s_settingsFile;
         Settings Current() => file.Current;
-        var settings = Current();
+        var settings = file.Refresh();
         // 設定で「ファイルにログを書く」を ON にしていれば、Mac でも meltype.log に書く (動かないときの調査用)。
         Diagnostics.Log.SetFileOutput(settings.FileLog ? Path.Combine(dataDirectory, "meltype.log") : null);
         Diagnostics.Log.RecordText = settings.LogTypedText;
