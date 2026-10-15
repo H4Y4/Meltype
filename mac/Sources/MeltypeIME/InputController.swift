@@ -9,12 +9,14 @@ import InputMethodKit
 /// 返ってきた結果 (確定する文字・変換中の表示・候補) を入力欄に反映する。
 /// Info.plist の InputMethodServerControllerClass に書いた名前で、Input Method Kit が作る。
 @objc(MeltypeInputController)
-final class MeltypeInputController: IMKInputController {
+final class MeltypeInputController: IMKInputController, ModeServiceTarget {
     private var session: UnsafeMutableRawPointer?
     private var candidateList: [String] = []
     private var hasMarkedText = false
-    private var codeInput = false
-    private var directInput = false
+    private var codeInput = ModeSelection.shared.current == .code
+    private var directInput = ModeSelection.shared.current == .direct
+    private var mode: MacInputMode { directInput ? .direct : codeInput ? .code : .automatic }
+    private let modeIndicator = ModeIndicator.shared
     /// 再変換中の、元の選択文字と、その位置。変換中の文字が選択範囲を置き換えているので、取り消したときはこれを入れ直す。
     private var reconvertingText: String?
     private var reconvertingLocation = NSNotFound
@@ -24,6 +26,13 @@ final class MeltypeInputController: IMKInputController {
 
     override func activateServer(_ sender: Any!) {
         super.activateServer(sender)
+        ModeServices.shared.activate(self)
+        let selected = ModeSelection.shared.current
+        if mode != selected {
+            directInput = selected == .direct
+            codeInput = selected == .code
+        }
+        NativeCore.shared.setDirect(session, directInput)
         NativeCore.shared.setCodeInput(session, codeInput)
         applyLatinKeyboardLayout(to: sender)
     }
@@ -44,6 +53,8 @@ final class MeltypeInputController: IMKInputController {
     override init!(server: IMKServer!, delegate: Any!, client inputClient: Any!) {
         super.init(server: server, delegate: delegate, client: inputClient)
         session = NativeCore.shared.createSession()
+        NativeCore.shared.setDirect(session, directInput)
+        NativeCore.shared.setCodeInput(session, codeInput)
         dictionaryObserver = DistributedNotificationCenter.default().addObserver(
             forName: Notification.Name("MeltypeUserDictionaryChanged"), object: nil, queue: .main
         ) { [weak self] _ in
@@ -80,7 +91,7 @@ final class MeltypeInputController: IMKInputController {
             switchToDirectInput(client)
             return true
         case kVK_JIS_Kana:
-            switchToJapanese()
+            switchToJapanese(client)
             return true
         default:
             break
@@ -97,7 +108,7 @@ final class MeltypeInputController: IMKInputController {
         if event.modifierFlags.contains([.control, .shift]), event.modifierFlags.intersection([.command, .option]).isEmpty {
             switch Int(event.keyCode) {
             case kVK_ANSI_J:
-                switchToJapanese()
+                switchToJapanese(client)
                 return true
             case kVK_ANSI_Semicolon, kVK_ANSI_Quote:
                 // 変換中は、まず普通のキーとして本体へ渡す。Ctrl キーの割り当て (Mac 式の Ctrl+: = 半角英字に変換など) が
@@ -110,6 +121,7 @@ final class MeltypeInputController: IMKInputController {
                     if result.consumed { return true }
                     directInput = true
                     NativeCore.shared.setDirect(session, true)
+                    rememberMode(caret: modeIndicatorCaret(client))
                     return true
                 }
                 switchToDirectInput(client)
@@ -202,6 +214,7 @@ final class MeltypeInputController: IMKInputController {
     }
 
     override func deactivateServer(_ sender: Any!) {
+        ModeServices.shared.deactivate(self)
         commitComposition(sender)
         reconvertingText = nil
         candidatesWindow?.hide()
@@ -257,6 +270,9 @@ final class MeltypeInputController: IMKInputController {
             item.state = selected ? .on : .off
         }
         menu.addItem(.separator())
+        let indicator = menu.addItem(withTitle: "入力モードをミニウィンドウで表示", action: #selector(toggleModeIndicator(_:)), keyEquivalent: "")
+        indicator.target = self
+        indicator.state = ModeIndicatorSettings.shared.isEnabled ? .on : .off
         let importItem = menu.addItem(withTitle: "macOSのユーザー辞書を取り込む…", action: #selector(importUserDictionary(_:)), keyEquivalent: "")
         importItem.target = self
         menu.addItem(withTitle: "Meltype のデータフォルダを開く (設定・ユーザー辞書)", action: #selector(openDataFolder(_:)), keyEquivalent: "")
@@ -264,32 +280,68 @@ final class MeltypeInputController: IMKInputController {
         return menu
     }
 
-    private func selectMode(direct: Bool, code: Bool) {
-        commitComposition(client())
+    private func selectMode(direct: Bool, code: Bool, showIndicator: Bool = false) {
+        let inputClient = client()
+        let caret = inputClient.flatMap { modeIndicatorCaret($0) }
+        commitComposition(inputClient)
         directInput = direct
         codeInput = code
         NativeCore.shared.setDirect(session, direct)
         NativeCore.shared.setCodeInput(session, code)
+        rememberMode(caret: inputClient.flatMap { modeIndicatorCaret($0) } ?? caret, showIndicator: showIndicator)
     }
 
-    /// 「英数」キー・Control+Shift+; ・ ': 未確定を確定して、英数 (直接入力) にする。
+    /// メニューと同じく、現在の表示を確定してからモードとミニウィンドウを更新する。
+    func selectModeFromService(_ action: ModeShortcutAction) -> Bool {
+        guard client() != nil else { return false }
+        let selected = action.mode(after: mode)
+        selectMode(direct: selected == .direct, code: selected == .code, showIndicator: true)
+        return true
+    }
+
+    private func rememberMode(caret: NSRect?, showIndicator: Bool = true) {
+        ModeSelection.shared.select(mode)
+        if showIndicator {
+            modeIndicator.show(mode, caret: caret)
+        } else {
+            modeIndicator.hide()
+        }
+    }
+
+    private func modeIndicatorCaret(_ client: IMKTextInput) -> NSRect? {
+        // IMK のインライン位置。0 はインラインセッションがない場合の現在の選択を表す。
+        let marked = client.markedRange()
+        let index = marked.location == NSNotFound ? 0 : marked.length
+        var rectangle = NSRect.zero
+        _ = client.attributes(forCharacterIndex: index, lineHeightRectangle: &rectangle)
+        return ModeIndicator.validCaret(rectangle) ? rectangle : nil
+    }
+
+    /// 「英数」キー・Control+Shift+; ・ ': 未確定を確定して、英数 (直接入力) にする。入力モードの表示も合わせる。
     private func switchToDirectInput(_ client: IMKTextInput) {
         apply(NativeCore.shared.commit(session), to: client)
         directInput = true
         NativeCore.shared.setDirect(session, true)
+        rememberMode(caret: modeIndicatorCaret(client))
     }
 
-    /// 「かな」キー・Control+Shift+J: 日本語 (自動判定) に戻す。
-    private func switchToJapanese() {
+    /// 「かな」キー・Control+Shift+J: 日本語 (自動判定) に戻す。入力モードの表示も合わせる。
+    private func switchToJapanese(_ client: IMKTextInput) {
         directInput = false
         codeInput = false
         NativeCore.shared.setCodeInput(session, false)
         NativeCore.shared.setDirect(session, false)
+        rememberMode(caret: modeIndicatorCaret(client))
     }
 
     @objc private func selectAutomatic(_ sender: Any?) { selectMode(direct: false, code: false) }
     @objc private func selectDirect(_ sender: Any?) { selectMode(direct: true, code: false) }
     @objc private func selectCode(_ sender: Any?) { selectMode(direct: false, code: true) }
+
+    @objc private func toggleModeIndicator(_ sender: Any?) {
+        ModeIndicatorSettings.shared.isEnabled.toggle()
+        modeIndicator.hide()
+    }
 
     @objc private func importUserDictionary(_ sender: Any?) {
         commitComposition(client())

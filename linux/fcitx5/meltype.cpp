@@ -469,9 +469,14 @@ private:
     void apply(fcitx::InputContext *ic, const Json &result) {
         if (auto *commits = result.get("commits"); commits && commits->kind == Json::Kind::Array) {
             for (const auto &edit : commits->items) {
-                hidePreedit(ic);
                 int remove = edit.integer("deleteBefore");
-                if (remove > 0) ic->deleteSurroundingText(-remove, static_cast<unsigned int>(remove));
+                if (remove > 0) {
+                    hidePreedit(ic);
+                    ic->deleteSurroundingText(-remove, static_cast<unsigned int>(remove));
+                } else {
+                    ic->inputPanel().reset();
+                    ic->propertyFor(&factory_)->preeditVisible = false;
+                }
                 auto committed = edit.str("text");
                 if (!committed.empty()) ic->commitString(committed);
             }

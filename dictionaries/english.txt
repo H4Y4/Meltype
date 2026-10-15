@@ -38,6 +38,8 @@ typedef enum struct public private protected static void int integer string stri
 false null nil undefined none self this new delete object objects array arrays list lists map maps set
 dict tuple float double char byte bytes long short args argv printf println print echo error errors warn
 warning info trace exception exceptions try catch finally throw raise def lambda yield await async
+# infobesity は情報過多。ty が残って いんふぉべしty になっていた (issue #538)
+infobesity
 while for if else elif switch case default goto break continue unset source alias sudo kill ps top
 make makefile cmake meson ninja gcc clang llvm msbuild nuget winget choco scoop brew apt yum dnf pacman
 node_modules dist bin obj lib src tmp temp var etc usr opt home desktop documents downloads

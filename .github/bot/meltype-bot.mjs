@@ -290,8 +290,6 @@ async function parse() {
   return output({ action: command, issue, keys: keys.slice(0, MaxKeys), last, reported: '', expected: '', kind: '', comment: event.comment.id });
 }
 
-const asciiWords = text => (text ?? '').match(/[A-Za-z][A-Za-z'’-]*/g)?.map(w => w.toLowerCase()) ?? [];
-const sameWords = (a, b) => asciiWords(a).join(' ') === asciiWords(b).join(' ');
 const code = text => '`' + String(text ?? '').replace(/`/g, 'ˋ') + '`';
 
 function readJson(file) {
@@ -337,8 +335,8 @@ async function report() {
       const extra = r.converted && r.converted !== result ? ` / Space: ${code(r.converted)}` : '';
       rows.push(`| ${name} | ${code(result)}${extra} |`);
       if (name === 'main' || name === 'pr') {
-        if (expected && (result === expected || r.converted === expected || sameWords(result, expected))) verdicts.push('match');
-        else if (reported && (result === reported || r.converted === reported || sameWords(result, reported))) verdicts.push('reproduced');
+        if (expected && (result === expected || r.converted === expected)) verdicts.push('match');
+        else if (reported && (result === reported || r.converted === reported)) verdicts.push('reproduced');
         else verdicts.push('different');
       }
     }

@@ -41,6 +41,11 @@ let package = Package(
                 .linkedFramework("Carbon"),
             ]
         ),
+        .testTarget(
+            name: "MeltypeIMETests",
+            dependencies: ["MeltypeIME"],
+            path: "Tests/MeltypeIMETests"
+        ),
     ],
     swiftLanguageModes: [.v5]
 )
