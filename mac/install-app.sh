@@ -50,6 +50,8 @@ target_device="$(stat -f %d "$(dirname "$target_app")")"
 }
 ditto "$source_app" "$stage/Meltype.app"
 codesign --verify --deep --strict "$stage/Meltype.app"
+# Remove the job from start-input-method.sh first; its KeepAlive would restart the old app before the swap.
+launchctl remove io.github.yksr-melt.Meltype.manual 2>/dev/null || true
 pkill -x Meltype 2>/dev/null || true
 if [[ -e "$target_app" ]]; then
     mv "$target_app" "$stage/previous.app"
