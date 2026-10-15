@@ -155,6 +155,8 @@ internal static class CompositionTests
     {
         private long _now = 1000;
         private bool _ctrlHeld;
+        // アプリ (OS) から見た Ctrl。フックで握りつぶした Ctrl は押されていないことになる (MeltypeEngine の GetAsyncKeyState と同じ)。
+        private bool _ctrlSeenByApp;
         public CaptureGate Gate { get; } = new(() => { });
         public FakeHost Host { get; } = new();
         public CompositionController Controller { get; }
@@ -264,14 +266,18 @@ internal static class CompositionTests
             Controller.Committed += Sigil.Append;
             Host.Replayed += e =>
             {
+                if (IsControlKey(e.Vk)) _ctrlSeenByApp = !e.IsUp;
                 if (!e.IsUp) Sigil.OnKey(e.Vk, Host.CharFromKey(e, _shiftHeld));
             };
         }
 
+        private static bool IsControlKey(int vk) => vk is VirtualKeys.Control or VirtualKeys.LControl or VirtualKeys.RControl;
+
         /// <summary>MeltypeEngine.StartsComposition と同じ条件。</summary>
         private bool Starts(KeyEvent k)
         {
-            if (!k.IsDown || _ctrlHeld) return false;
+            // MeltypeEngine.CommandModifierHeld と同じく、指で押している Ctrl とアプリから見た Ctrl の両方を見る
+            if (!k.IsDown || _ctrlHeld || _ctrlSeenByApp) return false;
             if (k.Vk == VirtualKeys.Convert) return true;
             if (SigilWords && (Direct || !Kana) && Host.CharFromKey(k, _shiftHeld) is { } typed && Sigil.PassesThrough(typed, Host.PrecedingText)) return false;
             var letter = VirtualKeys.IsLetter(k.Vk);
@@ -291,6 +297,7 @@ internal static class CompositionTests
             if (Direct && !up && !VirtualKeys.IsLetter(vk) && !VirtualKeys.IsModifier(vk)) _directEnglishWord = false;
             var swallowed = Gate.OnKey(e, Starts);
             if (!swallowed) Host.Events.Add($"{(up ? "passed-up" : "passed")}:{vk:X2}");
+            if (!swallowed && IsControlKey(vk)) _ctrlSeenByApp = !up;
             if (!swallowed && !up)
             {
                 if (_ctrlHeld) Sigil.Lose();
@@ -1320,6 +1327,61 @@ internal static class CompositionTests
         k = new Keyboard();
         CtrlPress(k, 'H');
         Assert.True(k.Host.Events.Contains("passed:48"), "Ctrl+H をアプリに通す: " + string.Join(" ", k.Host.Events));
+    }
+
+    [Test]
+    public static void CtrlHeld_HAfterEmptyingDeletesInApp()
+    {
+        // Ctrl を押したまま H で入力を消し切り、さらに H: 変換ボックスに h を入れず、Ctrl+H (前の文字を消す) としてアプリに届ける。
+        // 握りつぶしていた Ctrl をアプリに送っておかないと、アプリからもフックからも Ctrl が押されていないように見え、h が入っていた
+        foreach (var style in new[] { Meltype.Config.ControlKeyStyle.Atok, Meltype.Config.ControlKeyStyle.Mac })
+        {
+            var k = new Keyboard { ControlKeys = style };
+            k.Type("ka");
+            k.Key(VirtualKeys.LControl);
+            k.Press('H');
+            Assert.Equal(null, k.Showing, $"{style}: 消し切る");
+            k.Press('H');
+            k.Press('H');
+            Assert.Equal(null, k.Showing, $"{style}: h を入れない");
+            var events = string.Join(" ", k.Host.Events);
+            Assert.True(events.StartsWith("down:A2 ") && k.Host.Events.Count(e => e == "passed:48") == 2, $"{style}: Ctrl を送ってから H を通す: {events}");
+            k.Key(VirtualKeys.LControl, up: true);
+            Assert.True(k.Host.Events[^1] == "passed-up:A2", $"{style}: Ctrl を離したことも届く: {string.Join(" ", k.Host.Events)}");
+            k.Type("ka");
+            Assert.Equal("か", k.Showing, $"{style}: Ctrl を離した後は普通に打てる");
+            Assert.Equal("", k.Host.Document);
+        }
+    }
+
+    [Test]
+    public static void HeldModifiers_TracksPhysicalCtrlAltWin()
+    {
+        // AutoHotkey の ^n::Send "{Down}" などは、送る間 Ctrl を離したことにする (アプリからは押されていないように見える)。
+        // 指で押している Ctrl は、フックに届いた物理キーで追いかける
+        var held = new HeldModifiers();
+        Assert.True(!held.Any, "最初は何も押していない");
+        held.OnKey(VirtualKeys.LControl, isDown: true);
+        held.OnKey('N', isDown: true);
+        Assert.True(held.Any, "Ctrl を押している");
+        held.OnKey(VirtualKeys.LControl, isDown: true); // 押しっぱなしの繰り返し
+        held.OnKey(VirtualKeys.LControl, isDown: false);
+        Assert.True(!held.Any, "Ctrl を離した");
+        held.OnKey(VirtualKeys.LShift, isDown: true);
+        Assert.True(!held.Any, "Shift は対象外 (大文字を打つ)");
+        foreach (var vk in new[] { VirtualKeys.RControl, VirtualKeys.LMenu, VirtualKeys.RMenu, VirtualKeys.LWin, VirtualKeys.RWin })
+        {
+            held.OnKey(vk, isDown: true);
+            Assert.True(held.Any, $"0x{vk:X2} を押している");
+            held.OnKey(vk, isDown: false);
+        }
+        // ロック画面で離して解放がフックに届かなかったキーは、アプリから見て離されていれば外す
+        held.OnKey(VirtualKeys.LWin, isDown: true);
+        held.Resync(_ => false);
+        Assert.True(!held.Any, "合わせ直す");
+        held.OnKey(VirtualKeys.LControl, isDown: true);
+        held.Resync(vk => vk == VirtualKeys.LControl);
+        Assert.True(held.Any, "アプリから見ても押しているキーは残す");
     }
 
     [Test]

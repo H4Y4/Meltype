@@ -383,6 +383,14 @@ public sealed class CompositionController
                 _replayedDown.Add(shift);
             }
             _swallowedShift.Clear();
+            // 送らずにいた Ctrl (押したまま) も同じ。Ctrl+H で入力を消し切ったあと、続けて押す H がアプリには Ctrl なしで届き、
+            // フックも Ctrl を押していない (握りつぶしたのでアプリから見て押されていない) とみなして、h を変換ボックスに入れていた。
+            foreach (var control in _swallowedControl)
+            {
+                _host.Replay(new KeyEvent(control, 0, false, false, false, 0));
+                _replayedDown.Add(control);
+            }
+            _swallowedControl.Clear();
             if (_gate.TryRelease())
             {
                 // 以降のキーアップはフックを素通りしてアプリに直接届くので、追跡をやめる。

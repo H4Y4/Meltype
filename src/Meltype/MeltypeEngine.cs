@@ -198,6 +198,7 @@ internal sealed class MeltypeEngine : ISessionEnvironment, IDisposable
         // Meltype 自身が送り直したキーは、印 (InjectedMarker) でフックの入口で除いているので、ここには来ない (自分の出力を処理し直さない)。
         // Chrome リモート デスクトップ・Parsec で操作されている間も同じ (#372)。
         if (e.Injected && (settings.AllowInjectedInput || _remote.Active is not null)) e = e with { Injected = false };
+        if (!e.Injected) _heldModifiers.OnKey(e.Vk, e.IsDown);
         else if (e.Injected && e.IsDown && !_injectedHintLogged && settings.Mode == InputMode.Keyboard && KeyText.CharFromKey(e.Vk, e.Scan, false) is { } injected && injected > ' ')
         {
             // キー配列を変えるソフト (ULE4JIS: US 配列にする) も、押したキーを別のキーとして送り直すので、ほかのソフトが送ったキーとして届く (issue #250)
@@ -583,12 +584,12 @@ internal sealed class MeltypeEngine : ISessionEnvironment, IDisposable
         {
             return false;
         }
-        if (IsDown(VirtualKeys.Control) || IsDown(VirtualKeys.Menu) || IsDown(VirtualKeys.LWin) || IsDown(VirtualKeys.RWin)) return false;
+        if (CommandModifierHeld()) return Pass("Ctrl・Alt・Win を押している");
         // 先頭か空白の直後の ;名前 (定型文) は、Space / Tab まで変換せずにそのままアプリへ渡す (#290)。
         if (!reconvert && SnippetsEnabled(settings) && KeyText.CharFromKey(e.Vk, e.Scan, false) is { } snippetChar)
         {
             _snippet.Mark = settings.SnippetMark;
-            if (_snippet.PassesThrough(snippetChar, _line.Text)) return false;
+            if (_snippet.PassesThrough(snippetChar, _line.Text)) return Pass("定型文の名前");
         }
         // 先頭か空白の直後の /command・$skill・@ファイル名 は、名前の終わり (空白) まで変換せずにそのままアプリへ渡す (#193)。
         // かな入力では / などのキーはかな (め) なので対象にしない。
@@ -596,12 +597,12 @@ internal sealed class MeltypeEngine : ISessionEnvironment, IDisposable
             KeyText.CharFromKey(e.Vk, e.Scan, false) is { } typed && _sigil.PassesThrough(typed, _line.Text))
         {
             if (!_sigil.IsActive) Log.Info($"{typed} で始まる語: 空白までそのまま入力します");
-            return false;
+            return Pass("/ $ @ で始まる語");
         }
-        if (!_foreground.Check(settings).Allowed) return false;
+        if (_foreground.Check(settings) is { Allowed: false } denied) return Pass($"このアプリでは使わない ({denied.Reason})");
         // 文字入力欄 (パスワード以外) にフォーカスがあるときだけ。ショートカットキーやゲームの操作を横取りしない。
         if (_composition?.Focus.CanCaptureWaiting() != true &&
-            !(RechecksStaleFocus(_foreground.Current.ProcessName) && _composition?.Focus.RecheckStale() == true)) return false;
+            !(RechecksStaleFocus(_foreground.Current.ProcessName) && _composition?.Focus.RecheckStale() == true)) return Pass($"入力欄と確かめられない ({_composition?.Focus.Current.Description}{(_composition?.Focus.IsResolved == false ? "、調べている途中" : "")})");
         // コードエディター・ターミナル: コードの中は英数のまま通す (補完もそのまま効く)。コメント・文字列の中は日本語を判定する。
         if (!reconvert && !_keyboardDirect && IsCodeApp(settings))
         {
@@ -609,10 +610,26 @@ internal sealed class MeltypeEngine : ISessionEnvironment, IDisposable
             var kind = code ? LineKind.Code : LineKind.Comment;
             if (letter && _lastLineKind is { } last && last != kind) _composition?.ShowMode(!code);
             if (letter) _lastLineKind = kind;
-            if (code) return false;
+            if (code) return Pass("コードの中");
         }
         return true;
+
+        // 日本語入力のときに打ち始めの英字を変換ボックスに入れなかったら、理由をログに残す (英字がローマ字のまま入ったときに後から追えるように)。
+        bool Pass(string reason)
+        {
+            if (letter && !_keyboardDirect && (reason != _lastPassReason || e.TimeMs - _lastPassLogged > 3000))
+            {
+                _lastPassReason = reason;
+                _lastPassLogged = e.TimeMs;
+                Log.Info($"打ち始めの英字を変換ボックスに入れずにアプリへ渡しました: {reason}");
+            }
+            return false;
+        }
     }
+
+    // 打ち始めの英字を変換ボックスに入れなかった理由を、最後にログに残したもの (フックのスレッドだけが使う)
+    private string? _lastPassReason;
+    private long _lastPassLogged;
 
     /// <summary>英数状態で打ち始めた英字がローマ字 (日本語) かを、IME 自動切替と同じ判定器で調べる。UI スレッドから呼ばれる。</summary>
     public Verdict ClassifyDirect(string letters, bool final)
@@ -860,6 +877,8 @@ internal sealed class MeltypeEngine : ISessionEnvironment, IDisposable
     {
         // 変換中に別のウィンドウに切り替わったら、変換中の内容は捨てる (切り替わった先のアプリに入らないように)。
         _composition?.Abandon("別のウィンドウに切り替わった");
+        // ロック画面・UAC の画面に移っている間に離したキーは、フックに届かない。押したままと思い込まないように合わせ直す。
+        _heldModifiers.Resync(vk => IsDown(vk));
         _foreground.Refresh(window);
         InvalidateLine();
         _sigil.Start();
@@ -965,6 +984,18 @@ internal sealed class MeltypeEngine : ISessionEnvironment, IDisposable
     }
 
     private static bool IsDown(int vk) => (Native.GetAsyncKeyState(vk) & 0x8000) != 0;
+
+    // フックに届いた物理キーの Ctrl・Alt・Win (フックのスレッドだけが使う)。
+    private readonly HeldModifiers _heldModifiers = new();
+
+    /// <summary>
+    /// Ctrl・Alt・Win を押しているか。アプリから見た状態 (GetAsyncKeyState) だけでなく、指で押しているキーも見る。
+    /// Meltype が変換ボックスのために握りつぶした Ctrl や、キーを書き換えるソフト (AutoHotkey の ^n::Send "{Down}" など) が
+    /// 送る間に離したことにした Ctrl は、指で押していてもアプリからは押されていないように見え、続けて押した N や H を
+    /// 変換ボックスに入れてしまっていた。
+    /// </summary>
+    private bool CommandModifierHeld() =>
+        _heldModifiers.Any || IsDown(VirtualKeys.Control) || IsDown(VirtualKeys.Menu) || IsDown(VirtualKeys.LWin) || IsDown(VirtualKeys.RWin);
 
     private static void SafeRun(Action action)
     {

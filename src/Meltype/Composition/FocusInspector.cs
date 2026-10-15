@@ -125,6 +125,9 @@ public sealed class FocusInspector : IDisposable
 
     public FocusInfo Current => _info;
 
+    /// <summary>最新のフォーカスについて調べ終わっているか (ログ用)。</summary>
+    public bool IsResolved => Interlocked.Read(ref _resolvedSequence) == Interlocked.Read(ref _focusSequence);
+
     private long _lastRecheck;
     private long _lastRecheckForeground;
 
