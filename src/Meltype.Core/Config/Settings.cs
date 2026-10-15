@@ -94,6 +94,24 @@ public enum PunctuationStyle
     [Description("、．")] ToutenFullWidthPeriod,
 }
 
+/// <summary>設定「全角にする記号」「半角にする記号」で、記号の幅を決める。</summary>
+public static class SymbolWidth
+{
+    /// <summary>幅を設定で決められる記号か。- , . / は長音・句読点・中黒の専用の処理と設定があるので対象外。</summary>
+    public static bool IsConfigurable(char c) =>
+        c is >= '!' and <= '~' && !char.IsAsciiLetterOrDigit(c) && c is not ('-' or ',' or '.' or '/');
+
+    /// <summary>設定に書いた文字から、幅を決められる記号だけを重複なく残す。</summary>
+    public static string Clean(string? symbols) => string.Concat((symbols ?? "").Where(IsConfigurable).Distinct());
+
+    /// <summary>c をいつも半角にするか (halfWidth は設定「半角にする記号」)。</summary>
+    public static bool IsHalfWidth(string halfWidth, char c) => IsConfigurable(c) && halfWidth.Contains(c);
+
+    /// <summary>c をいつも全角にするか (fullWidth は設定「全角にする記号」)。両方に書いた記号は半角を優先する。</summary>
+    public static bool IsFullWidth(string fullWidth, string halfWidth, char c) =>
+        IsConfigurable(c) && fullWidth.Contains(c) && !halfWidth.Contains(c);
+}
+
 /// <summary>¥ キー・\ キーで入れる文字 (Mac の日本語入力の「"¥" キーで入力する文字」と同じ)。</summary>
 public enum YenKeyStyle
 {
@@ -295,9 +313,21 @@ public sealed class Settings
      Description("かなのすぐ後ろで打った / を中黒「・」にします (いーろん/ますく → イーロン・マスク)。英字・数字の後ろ (and/or、3/4、URL) と、打ち始めの / (/help) は / のままです。OFF のときも、z/ または / を打って Space で「・」にできます。")]
     public bool SlashAsMiddleDot { get; set; }
 
-    [Category("1. 全般"), DisplayName("括弧 ( ) を全角にする"),
-     Description("日本語入力で打った ( ) を全角の（ ）にします (Mac の日本語入力と同じ)。英単語を囲むとき (人工知能（AI）) も、英文の続きでも全角です。半角にしたいときは、Space で変換して候補から半角の ( ) を選びます。OFF なら今までどおり半角のままです。ON でも、URL の中、/ のすぐ後ろ (app/(auth)/login)、パスのすぐ後ろ (~/dir(1)/a.txt) の括弧と、英数 (直接入力) のときは半角のままです。")]
-    public bool FullWidthParentheses { get; set; }
+    [Category("1. 全般"), DisplayName("全角にする記号"),
+     Description("ここに書いた記号は、日本語入力で打ったとき、いつも全角にします (例: () と書くと ( ) が全角の（ ）に。Mac の日本語入力と同じ)。英単語を囲むとき (人工知能（AI）) も、英文の続きでも全角です。書いていない記号は今までどおりです。- , . / は書いても変わりません (長音・句読点・中黒の設定を使います)。URL の中、パスの中の括弧 (app/(auth)/login、~/dir(1)/a.txt)、英単語の中の記号 (don't)、英数 (直接入力) のときは、書いてあっても打ったままです。「半角にする記号」にも書いた記号は半角にします。")]
+    public string FullWidthSymbols { get; set; } = "";
+
+    [Category("1. 全般"), DisplayName("半角にする記号"),
+     Description("ここに書いた記号は、日本語入力で打ったとき、いつも半角 (打ったまま) にします (例: <>` と書くと、日本語の中でも < > ` が半角に。[] と書くと「」ではなく [ ] に)。書いていない記号は今までどおりです。- , . / は書いても変わりません (長音・句読点・中黒の設定を使います)。")]
+    public string HalfWidthSymbols { get; set; } = "";
+
+    [Category("1. 全般"), DisplayName("- を長音 (ー) にするのは、かなの後ろだけ"),
+     Description("ON にすると、日本語入力で打った - を長音の「ー」にするのは、かなのすぐ後ろ (らーめん、こーひー) だけにします。打ち始め・記号や英字の後ろでは半角の - のままです (- 箇条書き、->、--)。OFF なら今までどおり、日本語の中ではいつも「ー」です。")]
+    public bool LongVowelOnlyAfterKana { get; set; }
+
+    [Category("1. 全般"), DisplayName("記号だけ打って Space で、確定して空白"),
+     Description("ON にすると、「全角にする記号」「半角にする記号」に書いた記号 (と、半角にした -) だけを打って Space を押したとき、候補を開かずにそのまま確定して空白を入れます (# 見出し、- 箇条書き、> 引用)。OFF なら今までどおり、全角・半角の候補を開きます。")]
+    public bool SpaceCommitsSymbols { get; set; }
 
     [Category("1. 全般"), DisplayName("¥ キーで入力する文字"),
      Description("¥ キーと \\ キーで入れる文字です (Mac の日本語入力の「\"¥\" キーで入力する文字」と同じ)。「¥ (円記号)」は今までどおりで、日本語の中で打った \\ は全角の ￥ になります。「\\ (バックスラッシュ)」にすると、どちらのキーも半角の \\ を入れます (Mac の JIS 配列の ¥ キーも \\ になり、英数 (直接入力) のときにも効きます)。Windows の ¥ キーはもともと \\ の文字なので、変わるのは日本語の中で全角の ￥ にしなくなる点だけです。")]
@@ -828,6 +858,8 @@ public sealed class Settings
         FeedbackWindowMs = Math.Clamp(FeedbackWindowMs, 500, 30000);
         ImeTimeoutMs = Math.Clamp(ImeTimeoutMs, 50, 2000);
         LatinKeyboardLayout = (LatinKeyboardLayout ?? "").Trim();
+        FullWidthSymbols = SymbolWidth.Clean(FullWidthSymbols);
+        HalfWidthSymbols = SymbolWidth.Clean(HalfWidthSymbols);
         AppRules ??= [];
         AppKinds ??= [];
         AppRules.RemoveAll(r => r is null || string.IsNullOrWhiteSpace(r.Process));
@@ -899,6 +931,29 @@ public sealed class Settings
             catch (Exception copyEx) { Diagnostics.Log.Warn($"{Path.GetFileName(path)} を .broken に残せませんでした: {copyEx.Message}"); }
             Diagnostics.Log.Warn($"config.json を読み込めなかったため既定値を使います: {ex.Message}");
             return new Settings();
+        }
+    }
+
+    /// <summary>
+    /// 動いている間に書き換えられた config.json を読み直す。読めなければ null (前の設定のまま使う)。
+    /// <see cref="Load"/> と違い、読めなくても .broken に退避せず、移行した設定も保存しない (書いている途中のファイルを読むことがあるため)。
+    /// ファイルが無ければ既定値。
+    /// </summary>
+    public static Settings? TryReload(string path)
+    {
+        try
+        {
+            if (!File.Exists(path)) return new Settings();
+            var json = File.ReadAllText(path);
+            var settings = JsonSerializer.Deserialize(json, JsonType) ?? new Settings();
+            if (!json.Contains(nameof(SettingsVersion))) settings.SettingsVersion = 1;
+            settings.Migrate();
+            return settings.Normalize();
+        }
+        catch (Exception ex)
+        {
+            Diagnostics.Log.Warn($"書き換えられた config.json を読めなかったので、前の設定のまま使います: {ex.Message}");
+            return null;
         }
     }
 

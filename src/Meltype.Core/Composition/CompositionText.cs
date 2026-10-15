@@ -251,8 +251,26 @@ public sealed class CompositionText
     /// <summary>かなのすぐ後ろの / を中黒 (・) にするか (設定)。</summary>
     public Func<bool> SlashAsMiddleDot { get; set; } = () => false;
 
-    /// <summary>( ) を全角の（ ）にするか (設定)。ON なら、英語を囲んでいても全角のまま。</summary>
-    public Func<bool> FullWidthParentheses { get; set; } = () => false;
+    /// <summary>いつも全角にする記号 (設定)。英語を囲んでいても、英文の続きでも全角のまま。</summary>
+    public Func<string> FullWidthSymbols { get; set; } = () => "";
+
+    /// <summary>いつも半角 (打ったまま) にする記号 (設定)。両方に書いた記号は半角にする。</summary>
+    public Func<string> HalfWidthSymbols { get; set; } = () => "";
+
+    /// <summary>- を長音 (ー) にするのは、かなのすぐ後ろだけにするか (設定)。OFF なら日本語の中ではいつも「ー」。</summary>
+    public Func<bool> LongVowelOnlyAfterKana { get; set; } = () => false;
+
+    /// <summary>
+    /// 設定で幅を決めた記号 (と、設定で半角にした -) だけを打ったか (# - > など)。
+    /// 設定「記号だけ打って Space で、確定して空白」で、Space を変換ではなく確定 + 空白にする場面。
+    /// </summary>
+    public bool IsOnlyFixedWidthSymbols =>
+        !KanaInput && Mode == DisplayMode.Auto && _pending.Length == 0 && _units.Count > 0 && _units.All(unit => unit.Raw is [var c] &&
+            (c == '-' ? unit.Kana == "-" : SymbolWidth.IsHalfWidth(HalfWidthSymbols(), c) || SymbolWidth.IsFullWidth(FullWidthSymbols(), HalfWidthSymbols(), c)));
+
+    /// <summary>設定で全角に決めて、全角で入っている記号の単位か (パスの中の括弧は半角で入っているので違う)。</summary>
+    private bool IsFixedFullWidth(CompositionUnit unit) =>
+        unit.Raw is [var c] && unit.Kana != unit.Raw && SymbolWidth.IsFullWidth(FullWidthSymbols(), HalfWidthSymbols(), c);
 
     /// <summary>¥ キー・\ キーで入れる文字 (設定)。\ (バックスラッシュ) なら、\ を全角の ￥ にしない。</summary>
     public Func<YenKeyStyle> YenKey { get; set; } = () => YenKeyStyle.Yen;
@@ -741,7 +759,7 @@ public sealed class CompositionText
         if (partial)
         {
             // 構造の境界がローマ字単位の途中に入った場合だけ、その区間の原文を読み直す。
-            var fragment = new CompositionText(_detector) { FullWidthParentheses = FullWidthParentheses, YenKey = YenKey };
+            var fragment = new CompositionText(_detector) { FullWidthSymbols = FullWidthSymbols, HalfWidthSymbols = HalfWidthSymbols, LongVowelOnlyAfterKana = LongVowelOnlyAfterKana, YenKey = YenKey };
             foreach (var c in Raw[from..to]) fragment.Append(c);
             pending = fragment.Pending;
             return [.. fragment.Units];
@@ -776,8 +794,8 @@ public sealed class CompositionText
         for (var i = 0; i < _units.Count; i++)
         {
             if (!Openers.TryGetValue(_units[i].Raw, out var closer) || _units[i].Kana == _units[i].Raw) continue;
-            // 設定で全角にした括弧は、英語を囲んでいても全角のまま (人工知能（AI）)。
-            if (IsFullWidthParenthesis(_units[i])) continue;
+            // 設定で全角に決めた記号は、英語を囲んでいても全角のまま (人工知能（AI）)。
+            if (IsFixedFullWidth(_units[i])) continue;
             var nextIsEnglish = i + 1 < _units.Count ? offsets[i + 1] < english.Count && english[offsets[i + 1]] && char.IsAsciiLetter(_units[i + 1].Raw[0])
                 : Pending.Length > 0 && segments.Count > 0 && segments[^1].IsEnglish;
             var closing = Enumerable.Range(i + 1, _units.Count - i - 1).FirstOrDefault(k => _units[k].Raw == closer, -1);
@@ -797,14 +815,11 @@ public sealed class CompositionText
             adjusted[i] = _units[i] with { Kana = _units[i].Raw };
             for (var k = afterEnglish + 1; afterEnglish >= 0 && k <= closing; k++)
             {
-                if (!IsFullWidthParenthesis(_units[k])) adjusted[k] = _units[k] with { Kana = _units[k].Raw };
+                if (!IsFixedFullWidth(_units[k])) adjusted[k] = _units[k] with { Kana = _units[k].Raw };
             }
         }
         return adjusted;
     }
-
-    /// <summary>設定「括弧 ( ) を全角にする」で全角にした括弧か (OFF なら ( ) の表示は半角なので、ここには来ない)。</summary>
-    internal static bool IsFullWidthParenthesis(CompositionUnit unit) => unit is { Raw: "(", Kana: "（" } or { Raw: ")", Kana: "）" };
 
     /// <summary>判定の強さが「手動」のとき、標準の判定なら英字にする部分 (提案)。無ければ null。</summary>
     public string? Suggestion()
@@ -1307,16 +1322,42 @@ public sealed class CompositionText
     }
 
     /// <summary>日本語の中で打った記号 (Microsoft IME と同じく全角)。英語の区間では打ったままの半角で出す。数字と括弧は半角のまま。</summary>
-    private char Symbol(char c) => c switch
+    private char Symbol(char c)
     {
-        '-' => 'ー',
+        // 設定で幅を決めた記号は、いつもその幅 (両方に書いてあれば半角)。書いていない記号は下の既定のまま。
+        if (SymbolWidth.IsHalfWidth(HalfWidthSymbols(), c)) return c;
+        if (SymbolWidth.IsFullWidth(FullWidthSymbols(), HalfWidthSymbols(), c)) return c is '(' or ')' ? Parenthesis(c) : FullWidth(c);
+        return DefaultSymbol(c);
+    }
+
+    /// <summary>
+    /// 日本語の中で打った - の文字。ふつうは長音の「ー」。設定「- を長音にするのは、かなの後ろだけ」が ON なら、
+    /// かな (と ー) のすぐ後ろ以外 (打ち始め・記号や英字の後ろ) は半角の - (- 箇条書き、->、--)。
+    /// </summary>
+    private char Hyphen() =>
+        !LongVowelOnlyAfterKana() || _units.Count > 0 && _units[^1].Kana is [.., var kana] && kana is >= 'ぁ' and <= 'ゖ' or >= 'ァ' and <= 'ヺ' or 'ー'
+            ? 'ー' : '-';
+
+    /// <summary>記号の全角の形。' " \ は、既定で全角にするときと同じ ’ ” ￥。</summary>
+    private static char FullWidth(char c) => c switch
+    {
+        '\'' => '’',
+        '"' => '”',
+        '\\' => '￥',
+        _ => (char)(c + 0xFEE0),
+    };
+
+    private char DefaultSymbol(char c) => c switch
+    {
+        '-' => Hyphen(),
         // 句読点は設定の組み合わせ (、。 / ，． / ，。 / 、．)。
         ',' => Comma,
         '.' => Period,
         '[' => '「',
         ']' => '」',
-        // ASCII の括弧はチャット本文でもそのまま使われるため、入力した幅を保つ。設定で全角にできる。
-        '(' or ')' => Parenthesis(c),
+        // ASCII の括弧はチャット本文でもそのまま使われるため、入力した幅を保つ (設定「全角にする記号」で全角にできる)。
+        '(' => '(',
+        ')' => ')',
         // ! ? は Microsoft IME と同じく全角 (テスターのチャットでも、日本語の後ろの ？ ！ は 96% が全角だった)。
         // : ; | はチャット本文でも半角で使うので、入力した幅を保つ。
         ':' => ':',
@@ -1337,13 +1378,12 @@ public sealed class CompositionText
     };
 
     /// <summary>
-    /// 今打った括弧。設定「括弧 ( ) を全角にする」が ON なら全角の（ ）。
-    /// ON でも、パスの中の括弧は半角のまま: / \ のすぐ後ろ (app/(auth)/login) と、パスのすぐ後ろ (~/dir(1)/a.txt) の開き括弧。
+    /// 設定で全角に決めた括弧を、今打った。全角の（ ）にする。
+    /// ただし、パスの中の括弧は半角のまま: / \ のすぐ後ろ (app/(auth)/login) と、パスのすぐ後ろ (~/dir(1)/a.txt) の開き括弧。
     /// 半角の括弧の中の括弧 (~/a(b(c))/d) と閉じ括弧は、外側・対になる開き括弧と同じ幅にする。
     /// </summary>
     private char Parenthesis(char c)
     {
-        if (!FullWidthParentheses()) return c;
         // まだ閉じていない開き括弧のうち、いちばん内側のものが半角か
         var insideHalfWidth = false;
         var depth = 0;

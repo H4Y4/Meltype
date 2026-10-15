@@ -115,13 +115,19 @@ public sealed partial class CompositionDetector
     public Func<bool>? UseJapanesePunctuationAfterEnglish { get; set; }
 
     /// <summary>
+    /// 設定「全角にする記号」で、いつも全角にすると決めた記号か (「半角にする記号」にも書いた記号は違う)。
+    /// null なら、決めた記号は無い。
+    /// </summary>
+    public Func<char, bool>? IsFixedFullWidthSymbol { get; set; }
+
+    /// <summary>
     /// 英字の後ろの記号 units[i] を、英文の記号 (半角のまま) として扱うか。設定が ON でも、キャレットの前が英語なら英文の続き。
     /// すぐ後ろに英数字が続く . は、ドメイン・拡張子の区切り (tetr.io、MeltypeTip.dll)。
-    /// 設定で全角にした括弧は、英字の後ろでも全角のまま ((test) → （test）)。
+    /// 設定で全角に決めて、全角で入っている記号は、英字の後ろでも全角のまま ((test) → （test）)。
     /// </summary>
     private bool KeepsPunctuationAfterEnglish(IReadOnlyList<CompositionUnit> units, int i, string pending, bool? precedingEnglish)
     {
-        if (CompositionText.IsFullWidthParenthesis(units[i])) return false;
+        if (units[i] is { Raw: [var symbol] } unit && unit.Kana != unit.Raw && IsFixedFullWidthSymbol?.Invoke(symbol) == true) return false;
         if (units[i].Raw is not ("," or ".") || precedingEnglish == true || UseJapanesePunctuationAfterEnglish?.Invoke() != true) return true;
         var next = i + 1 < units.Count ? units[i + 1].Raw : pending;
         return units[i].Raw == "." && next.Length > 0 && char.IsAsciiLetterOrDigit(next[0]);

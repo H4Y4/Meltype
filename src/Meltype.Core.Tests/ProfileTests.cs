@@ -121,7 +121,7 @@ internal static class ProfileTests
             new Settings
             {
                 ControlKeys = ControlKeyStyle.Mac,
-                FullWidthParentheses = true,
+                FullWidthSymbols = "()",
                 LatinKeyboardLayout = "com.apple.keylayout.ABC",
                 DetectionLevel = DetectionLevel.Aggressive,
                 Enabled = false,
@@ -134,7 +134,7 @@ internal static class ProfileTests
             var imported = Settings.Load(windows);
             Assert.Equal(name, imported.ActiveProfile, "読み込んだ設定を使う");
             Assert.Equal(ControlKeyStyle.Mac, imported.ControlKeys);
-            Assert.True(imported.FullWidthParentheses, "括弧を全角にする");
+            Assert.Equal("()", imported.FullWidthSymbols, "括弧を全角にする");
             Assert.Equal(DetectionLevel.Aggressive, imported.DetectionLevel);
             Assert.Equal("com.apple.keylayout.ABC", imported.LatinKeyboardLayout, "Mac だけの項目も持ち運ぶ (Windows では使わない)");
             Assert.True(imported.Enabled && imported.Mode == InputMode.Tsf && imported.FileLog, "PC ごとの項目 (ON/OFF・動作モード・ログ) は変えない");

@@ -48,6 +48,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         detector.SpellChecker = Detection.WindowsSpellChecker.Shared;
         detector.UseScoredSegmentation = () => _engine.AppSettings.ScoredSegmentation;
         detector.UseJapanesePunctuationAfterEnglish = () => _engine.Settings.JapanesePunctuationAfterEnglish;
+        detector.IsFixedFullWidthSymbol = c => SymbolWidth.IsFullWidth(_engine.Settings.FullWidthSymbols, _engine.Settings.HalfWidthSymbols, c);
         _composition = new Composition.CompositionService(_invoker, detector, new Composition.CompositionOptions
         {
             LiveConversion = () => _engine.AppSettings.LiveConversion,
@@ -66,7 +67,10 @@ internal sealed class TrayApplicationContext : ApplicationContext
             SeparateKeyRoles = () => _engine.Settings.SeparateKeyRoles,
             CorrectTypos = () => _engine.Settings.CorrectTypos,
             SlashAsMiddleDot = () => _engine.Settings.SlashAsMiddleDot,
-            FullWidthParentheses = () => _engine.Settings.FullWidthParentheses,
+            FullWidthSymbols = () => _engine.Settings.FullWidthSymbols,
+            HalfWidthSymbols = () => _engine.Settings.HalfWidthSymbols,
+            LongVowelOnlyAfterKana = () => _engine.Settings.LongVowelOnlyAfterKana,
+            SpaceCommitsSymbols = () => _engine.Settings.SpaceCommitsSymbols,
             YenKey = () => _engine.Settings.YenKey,
             SpaceAroundEnglish = () => _engine.Settings.SpaceAroundEnglish,
             Punctuation = () => _engine.Settings.Punctuation,

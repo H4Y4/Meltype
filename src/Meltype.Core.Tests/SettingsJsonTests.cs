@@ -119,6 +119,47 @@ internal static class SettingsJsonTests
     }
 
     [Test]
+    public static void SettingsFile_ReloadsWhenChanged()
+    {
+        // config.json が書き換えられたら読み直す (開いたままの入力欄にもすぐ効く)。調べるのは 1 秒に 1 回まで。
+        var directory = Path.Combine(Path.GetTempPath(), "meltype-settings-file-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var path = Path.Combine(directory, "config.json");
+            File.WriteAllText(path, "{ \"SettingsVersion\": 5, \"HalfWidthSymbols\": \"\" }");
+            long now = 0;
+            var file = new SettingsFile(path, () => now);
+            Assert.Equal("", file.Current.HalfWidthSymbols, "最初に読む");
+
+            void Write(string json, int seconds)
+            {
+                File.WriteAllText(path, json);
+                File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddSeconds(seconds));
+            }
+            Write("{ \"SettingsVersion\": 5, \"HalfWidthSymbols\": \"*\" }", 10);
+            now = 500;
+            Assert.Equal("", file.Current.HalfWidthSymbols, "1 秒たつまでは調べない");
+            now = 1000;
+            Assert.Equal("*", file.Current.HalfWidthSymbols, "書き換えられたら読み直す");
+
+            // 書いている途中・書き間違いのファイルは読めないので、前の設定のまま。.broken にも退避しない
+            Write("{ \"SettingsVersion\": 5, \"HalfWidthSymbols\": ", 20);
+            now = 2000;
+            Assert.Equal("*", file.Current.HalfWidthSymbols, "読めなければ前の設定のまま");
+            Assert.True(!File.Exists(path + ".broken"), "読み直しでは .broken に退避しない");
+            Write("{ \"SettingsVersion\": 5, \"HalfWidthSymbols\": \"*>\" }", 30);
+            now = 3000;
+            Assert.Equal("*>", file.Current.HalfWidthSymbols, "書き終わったら読み直す");
+            // 入力欄を作るときは、間隔を待たずに調べる
+            Write("{ \"SettingsVersion\": 5, \"HalfWidthSymbols\": \"*>#\" }", 40);
+            Assert.Equal("*>", file.Current.HalfWidthSymbols, "間隔の中は調べない");
+            Assert.Equal("*>#", file.Refresh().HalfWidthSymbols, "Refresh はすぐ調べる");
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [Test]
     public static void SettingsJson_LatinKeyboardLayout()
     {
         // Mac 版だけが使う「英字のレイアウト」。書かなければ空 (指定なし)、前後の空白は取る

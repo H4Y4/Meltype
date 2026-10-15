@@ -175,12 +175,19 @@ public sealed class MeltypeSession
     // Input Method Kit・fcitx5・IBus はどれも 1 つのスレッド (メインループ) から呼ぶので、排他はしない。
     private static (string Directory, CompositionDetector Detector, CompositionOptions Options)? s_shared;
 
+    // config.json (入力欄で共有し、書き換えられたら読み直す)。
+    private static SettingsFile? s_settingsFile;
+
     /// <summary>dataDirectory に置いた設定・辞書・学習データで作る (テストでは一時フォルダーを渡す)。</summary>
     internal static MeltypeSession CreateDefault(string dataDirectory, IKanjiConverter converter, Func<string, IReadOnlyList<string>>? moreCandidates, IWordChecker? wordChecker, bool autoSpacing = false, bool shiftArrowPaging = false)
     {
         Directory.CreateDirectory(dataDirectory);
-        // 設定は入力欄を作るたびに読み直す (設定の変更は、次に開いた入力欄から効く)。
-        var settings = Settings.Load(Path.Combine(dataDirectory, "config.json"));
+        // 設定は入力欄で共有し、config.json が書き換えられたら読み直す (開いたままの入力欄にもすぐ効く)。
+        var configPath = Path.Combine(dataDirectory, "config.json");
+        if (s_settingsFile?.Path != configPath) s_settingsFile = new SettingsFile(configPath);
+        var file = s_settingsFile;
+        Settings Current() => file.Current;
+        var settings = file.Refresh();
         // 設定で「ファイルにログを書く」を ON にしていれば、Mac でも meltype.log に書く (動かないときの調査用)。
         Diagnostics.Log.SetFileOutput(settings.FileLog ? Path.Combine(dataDirectory, "meltype.log") : null);
         Diagnostics.Log.RecordText = settings.LogTypedText;
@@ -208,34 +215,38 @@ public sealed class MeltypeSession
         // 検出器は入力欄で共有するので、検出器が見る設定は最後に作った入力欄で読んだもの。
         // OS のスペルチェッカーが無ければ (Linux)、同梱のよく使う英単語の一覧を使う (meeting を英語と分かるように)。
         detector.SpellChecker = wordChecker is { IsAvailable: true } ? wordChecker : Detection.BuiltInWordChecker.Shared;
-        detector.UseScoredSegmentation = () => settings.ScoredSegmentation;
-        detector.UseJapanesePunctuationAfterEnglish = () => settings.JapanesePunctuationAfterEnglish;
+        detector.UseScoredSegmentation = () => Current().ScoredSegmentation;
+        detector.UseJapanesePunctuationAfterEnglish = () => Current().JapanesePunctuationAfterEnglish;
+        detector.IsFixedFullWidthSymbol = c => SymbolWidth.IsFullWidth(Current().FullWidthSymbols, Current().HalfWidthSymbols, c);
         var options = shared.Options with
         {
-            LiveConversion = () => settings.LiveConversion,
-            AutoCorrect = () => settings.AutoCorrectAfterCommit && settings.DetectionLevel != DetectionLevel.Manual,
-            Level = () => settings.DetectionLevel,
+            LiveConversion = () => Current().LiveConversion,
+            AutoCorrect = () => Current().AutoCorrectAfterCommit && Current().DetectionLevel != DetectionLevel.Manual,
+            Level = () => Current().DetectionLevel,
             // ユーザー辞書は入力欄を作るたびに読み直す (Mac は辞書を取り込んだ後に入力欄を作り直して反映する)。
             // dictionaries/ に置いた macOS の「ユーザ辞書」の .plist も読む (#40)
             UserDictionary = new UserDictionary(Path.Combine(dataDirectory, "userdict.txt"), importDirectory: userDirectory),
             MoreCandidates = moreCandidates,
-            TranslationCandidates = () => settings.TranslationCandidates,
-            TabConversion = () => settings.TabConversion,
-            ContinueAfterConversion = () => settings.ContinueAfterConversion,
-            Learning = () => settings.LearningEnabled,
-            SeparateKeyRoles = () => settings.SeparateKeyRoles,
-            CandidateMeanings = () => settings.ShowCandidateMeanings,
-            CorrectTypos = () => settings.CorrectTypos,
-            SlashAsMiddleDot = () => settings.SlashAsMiddleDot,
-            FullWidthParentheses = () => settings.FullWidthParentheses,
-            YenKey = () => settings.YenKey,
-            SpaceAroundEnglish = () => settings.SpaceAroundEnglish,
+            TranslationCandidates = () => Current().TranslationCandidates,
+            TabConversion = () => Current().TabConversion,
+            ContinueAfterConversion = () => Current().ContinueAfterConversion,
+            Learning = () => Current().LearningEnabled,
+            SeparateKeyRoles = () => Current().SeparateKeyRoles,
+            CandidateMeanings = () => Current().ShowCandidateMeanings,
+            CorrectTypos = () => Current().CorrectTypos,
+            SlashAsMiddleDot = () => Current().SlashAsMiddleDot,
+            FullWidthSymbols = () => Current().FullWidthSymbols,
+            HalfWidthSymbols = () => Current().HalfWidthSymbols,
+            LongVowelOnlyAfterKana = () => Current().LongVowelOnlyAfterKana,
+            SpaceCommitsSymbols = () => Current().SpaceCommitsSymbols,
+            YenKey = () => Current().YenKey,
+            SpaceAroundEnglish = () => Current().SpaceAroundEnglish,
             AutomaticEnglishSpacing = () => autoSpacing,
             ShiftArrowPaging = shiftArrowPaging,
-            Punctuation = () => settings.Punctuation,
-            ControlKeys = () => settings.ControlKeys,
+            Punctuation = () => Current().Punctuation,
+            ControlKeys = () => Current().ControlKeys,
         };
-        return new MeltypeSession(detector, converter, options, () => settings);
+        return new MeltypeSession(detector, converter, options, Current);
     }
 
     /// <summary>英数 (直接入力) か。true の間はキーをすべてアプリに渡す (Mac の「英数」キー、「かな」キーで戻す)。</summary>

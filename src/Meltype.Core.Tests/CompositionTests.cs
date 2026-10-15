@@ -188,8 +188,17 @@ internal static class CompositionTests
         /// <summary>入力中の Ctrl キーの割り当て (設定)。</summary>
         public Meltype.Config.ControlKeyStyle ControlKeys { get; set; }
 
-        /// <summary>( ) を全角にするか (設定)。</summary>
-        public bool FullWidthParentheses { get; set; }
+        /// <summary>いつも全角にする記号 (設定)。検出器にも伝えるときは <see cref="WithSymbolWidths"/> を使う。</summary>
+        public string FullWidthSymbols { get; set; } = "";
+
+        /// <summary>いつも半角にする記号 (設定)。</summary>
+        public string HalfWidthSymbols { get; set; } = "";
+
+        /// <summary>- を長音にするのは、かなの後ろだけにするか (設定)。</summary>
+        public bool LongVowelOnlyAfterKana { get; set; }
+
+        /// <summary>幅を決めた記号だけを打って Space で、確定して空白を入れるか (設定)。</summary>
+        public bool SpaceCommitsSymbols { get; set; }
 
         /// <summary>¥ キー・\ キーで入れる文字 (設定)。</summary>
         public Meltype.Config.YenKeyStyle YenKey { get; set; }
@@ -264,7 +273,10 @@ internal static class CompositionTests
                 Punctuation = () => Punctuation,
                 ControlKeys = () => ControlKeys,
                 SlashAsMiddleDot = () => slashAsMiddleDot,
-                FullWidthParentheses = () => FullWidthParentheses,
+                FullWidthSymbols = () => FullWidthSymbols,
+                HalfWidthSymbols = () => HalfWidthSymbols,
+                LongVowelOnlyAfterKana = () => LongVowelOnlyAfterKana,
+                SpaceCommitsSymbols = () => SpaceCommitsSymbols,
                 YenKey = () => YenKey,
                 Now = now ?? (() => DateTime.Now),
                 ShowTypedKeys = () => showTypedKeys,
@@ -2603,17 +2615,40 @@ internal static class CompositionTests
         }
     }
 
-    [Test]
-    public static void Parentheses_FollowSetting()
+    /// <summary>
+    /// 設定「全角にする記号」「半角にする記号」を入れたキーボードで body を動かす。
+    /// 検出器はテストで共有しているので、検出器に伝えた設定は終わったら戻す (アプリでは入力欄を作るときに伝える)。
+    /// </summary>
+    private static T WithSymbolWidths<T>(string fullWidth, string halfWidth, Func<Keyboard, T> body, Func<Keyboard>? create = null)
     {
-        // 設定「括弧 ( ) を全角にする」。OFF (既定) は今までどおり半角、ON は英語を囲んでいても全角。
-        string Type(string keys, bool on, string? before = null)
+        Detector.IsFixedFullWidthSymbol = c => Meltype.Config.SymbolWidth.IsFullWidth(fullWidth, halfWidth, c);
+        try
         {
-            var k = new Keyboard { FullWidthParentheses = on };
+            var k = create?.Invoke() ?? new Keyboard();
+            k.FullWidthSymbols = fullWidth;
+            k.HalfWidthSymbols = halfWidth;
+            return body(k);
+        }
+        finally
+        {
+            Detector.IsFixedFullWidthSymbol = null;
+        }
+    }
+
+    /// <summary>設定「全角にする記号」「半角にする記号」で keys を打って、確定した文字を返す。</summary>
+    private static string TypeWithSymbolWidths(string keys, string fullWidth = "", string halfWidth = "", string? before = null) =>
+        WithSymbolWidths(fullWidth, halfWidth, k =>
+        {
             k.Host.PrecedingText = before;
             k.Type(keys);
             return k.Host.Document;
-        }
+        });
+
+    [Test]
+    public static void Parentheses_FollowSetting()
+    {
+        // 設定「全角にする記号」に ( ) を書く。書かなければ (既定) 今までどおり半角、書けば英語を囲んでいても全角。
+        string Type(string keys, bool on, string? before = null) => TypeWithSymbolWidths(keys, on ? "()" : "", before: before);
         foreach (var (keys, half, full) in new[]
         {
             ("kore(nihongo)desu\n", "これ(にほんご)です", "これ（にほんご）です"),
@@ -2623,8 +2658,8 @@ internal static class CompositionTests
             ("()\n", "()", "（）"),
         })
         {
-            Assert.Equal(half, Type(keys, on: false), "OFF は半角: " + keys.TrimEnd());
-            Assert.Equal(full, Type(keys, on: true), "ON は全角: " + keys.TrimEnd());
+            Assert.Equal(half, Type(keys, on: false), "書かなければ半角: " + keys.TrimEnd());
+            Assert.Equal(full, Type(keys, on: true), "書けば全角: " + keys.TrimEnd());
         }
         // 区切りを点数で選ぶ (α版) でも同じ
         Detector.UseScoredSegmentation = () => true;
@@ -2632,17 +2667,17 @@ internal static class CompositionTests
         {
             Assert.Equal("（test）", Type("(test)\n", on: true), "点数で選ぶ: 英字だけ");
             Assert.Equal("じんこうちのう（AI）です", Type("jinkoutinou(AI)desu\n", on: true), "点数で選ぶ: 日本語の中");
-            Assert.Equal("(test)", Type("(test)\n", on: false), "点数で選ぶ: OFF は半角");
+            Assert.Equal("(test)", Type("(test)\n", on: false), "点数で選ぶ: 書かなければ半角");
         }
         finally
         {
             Detector.UseScoredSegmentation = null;
         }
-        // 英文の続き (キャレットの前が英語) でも、ON なら全角
+        // 英文の続き (キャレットの前が英語) でも全角
         Assert.Equal("（maybe）", Type("(maybe)\n", on: true, before: "I think "), "英文の続き");
         // 閉じていない括弧の後ろが英語でも全角のまま
         Assert.Equal("（Ooh", Type("(Ooh\n", on: true), "閉じていない括弧");
-        // パスの中の括弧は ON でも半角のまま (OFF と同じ結果になる): / のすぐ後ろ、パスのすぐ後ろ、その中の括弧
+        // パスの中の括弧は半角のまま (書かないときと同じ結果になる): / のすぐ後ろ、パスのすぐ後ろ、その中の括弧
         foreach (var keys in new[] { "app/(auth)/login/page.tsx\n", "~/dir(1)/a.txt\n", "~/a(b(c))/d\n", "C:\\dir(1)\n", "1/(2+3)\n", "https://example.com/a_(b)\n" })
         {
             Assert.Equal(Type(keys, on: false), Type(keys, on: true), "パスの中は半角のまま: " + keys.TrimEnd());
@@ -2651,41 +2686,160 @@ internal static class CompositionTests
         Assert.Equal("ふぁいる（~/a.txt）をひらく", Type("fairu(~/a.txt)wohiraku\n", on: true), "パスを囲む括弧");
         Assert.Equal("これ（~/a(1)）です", Type("kore(~/a(1))desu\n", on: true), "パスを囲む括弧と、パスの中の括弧");
         // 中黒にした / (設定「/ キーで中黒」) の後ろはパスではない
-        var dot = new Keyboard(slashAsMiddleDot: true) { FullWidthParentheses = true };
-        dot.Type("i-ron/(masuku)\n");
-        Assert.Equal("いーろん・（ますく）", dot.Host.Document, "中黒の後ろは全角");
-        // ほかの開きの記号は今までどおり、英語を囲むと半角に戻る
-        Assert.Equal("これ{AI}です", Type("kore{AI}desu\n", on: true), "{ } は対象外");
+        var dot = WithSymbolWidths("()", "", k => { k.Type("i-ron/(masuku)\n"); return k.Host.Document; }, () => new Keyboard(slashAsMiddleDot: true));
+        Assert.Equal("いーろん・（ますく）", dot, "中黒の後ろは全角");
+        // 書いていない開きの記号は今までどおり、英語を囲むと半角に戻る
+        Assert.Equal("これ{AI}です", Type("kore{AI}desu\n", on: true), "{ } は書いていない");
         // F10 (半角英数) は打ったまま
-        var f10 = new Keyboard { FullWidthParentheses = true };
-        f10.Type("(a)");
-        f10.Press(VirtualKeys.F10);
-        Assert.Equal("(a)", f10.Showing, "F10 は半角");
+        var f10 = WithSymbolWidths("()", "", k => { k.Type("(a)"); k.Press(VirtualKeys.F10); return k.Showing; });
+        Assert.Equal("(a)", f10, "F10 は半角");
     }
 
     [Test]
-    public static void Parentheses_FullWidth_HalfWidthCandidate()
+    public static void Symbols_WidthFollowsSetting()
     {
-        // ON でも、Space で変換すれば候補から半角の ( を選べる
-        var k = new Keyboard { FullWidthParentheses = true };
-        k.Type("( ");
-        Assert.Equal("（", k.Host.View!.Candidates[0]);
-        Assert.True(k.Host.View.Candidates.Contains("("), "（ の候補に ( がある: " + string.Join(",", k.Host.View.Candidates));
+        // 設定「半角にする記号」: 書いた記号は、日本語の中でも打ったまま
+        foreach (var (keys, normal, half) in new[]
+        {
+            ("kore>are\n", "これ＞あれ", "これ>あれ"),
+            ("kore<are>\n", "これ＜あれ＞", "これ<あれ>"),
+            ("`kakko`\n", "｀かっこ｀", "`かっこ`"),
+            ("kore[are]\n", "これ「あれ」", "これ[あれ]"),
+            ("kore!\n", "これ！", "これ!"),
+            ("kore\\are\n", "これ￥あれ", "これ\\あれ"),
+            ("kore~are\n", "これ～あれ", "これ~あれ"),
+            ("kore'are'\n", "これ’あれ’", "これ'あれ'"),
+        })
+        {
+            Assert.Equal(normal, TypeWithSymbolWidths(keys), "書かなければ今までどおり: " + keys.TrimEnd());
+            Assert.Equal(half, TypeWithSymbolWidths(keys, halfWidth: "<>`[]!\\~'"), "書けば半角: " + keys.TrimEnd());
+        }
+        // 設定「全角にする記号」: 書いた記号は、英語の後ろでも、英文の続きでも全角
+        foreach (var (keys, normal, full) in new[]
+        {
+            ("kore#are\n", "これ#あれ", "これ＃あれ"),
+            ("kore:are\n", "これ:あれ", "これ：あれ"),
+            ("kore|are\n", "これ|あれ", "これ｜あれ"),
+            ("hello!\n", "hello!", "hello！"),
+            ("kore{AI}desu\n", "これ{AI}です", "これ｛AI｝です"),
+        })
+        {
+            Assert.Equal(normal, TypeWithSymbolWidths(keys), "書かなければ今までどおり: " + keys.TrimEnd());
+            Assert.Equal(full, TypeWithSymbolWidths(keys, fullWidth: "#:|!{}"), "書けば全角: " + keys.TrimEnd());
+        }
+        Assert.Equal("world！", TypeWithSymbolWidths("world!\n", fullWidth: "!", before: "Hello "), "英文の続きでも全角");
+        // 両方に書いた記号は半角
+        Assert.Equal("これ>あれ", TypeWithSymbolWidths("kore>are\n", fullWidth: "<>", halfWidth: ">"), "両方に書けば半角");
+        Assert.Equal("これ＜あれ", TypeWithSymbolWidths("kore<are\n", fullWidth: "<>", halfWidth: ">"), "片方だけなら、その幅");
+        // - , . / は書いても変わらない (長音・句読点・中黒の処理を使う)
+        foreach (var keys in new[] { "ra-men,desu.\n", "1.5to1,000\n", "and/or\n", "kore/are\n" })
+        {
+            Assert.Equal(TypeWithSymbolWidths(keys), TypeWithSymbolWidths(keys, fullWidth: "-,./", halfWidth: ""), "全角に書いても変わらない: " + keys.TrimEnd());
+            Assert.Equal(TypeWithSymbolWidths(keys), TypeWithSymbolWidths(keys, halfWidth: "-,./"), "半角に書いても変わらない: " + keys.TrimEnd());
+        }
+        // 英単語の中の記号・URL は、書いてあっても打ったまま
+        foreach (var keys in new[] { "don't\n", "tetr.io\n", "https://example.com/a?b=1#c\n", "alice@example.com\n" })
+        {
+            Assert.Equal(keys.TrimEnd(), TypeWithSymbolWidths(keys, fullWidth: "'?=#@:"), "打ったまま: " + keys.TrimEnd());
+        }
     }
 
     [Test]
-    public static void Parentheses_SettingIsSaved()
+    public static void LongVowel_OnlyAfterKana()
     {
-        Assert.True(!new Meltype.Config.Settings().FullWidthParentheses, "既定は OFF (半角)");
-        var path = Path.Combine(Path.GetTempPath(), $"meltype-parentheses-{Guid.NewGuid():N}.json");
+        // 設定「- を長音にするのは、かなの後ろだけ」。OFF (既定) は今までどおり、日本語の中ではいつも ー
+        string Type(string keys, bool on, string half = "")
+        {
+            var k = new Keyboard { LongVowelOnlyAfterKana = on, HalfWidthSymbols = half };
+            k.Type(keys);
+            return k.Host.Document;
+        }
+        foreach (var (keys, off, on) in new[]
+        {
+            ("ra-men\n", "らーめん", "らーめん"),
+            ("ko-hi-\n", "こーひー", "こーひー"),
+            ("hai-\n", "はいー", "はいー"),
+            ("su--pa-\n", "すーーぱー", "すーーぱー"),
+            ("-\n", "ー", "-"),
+            ("--\n", "ーー", "--"),
+            ("-1\n", "-1", "-1"),
+            ("2026-10-16\n", "2026-10-16", "2026-10-16"),
+        })
+        {
+            Assert.Equal(off, Type(keys, on: false), "OFF: " + keys.TrimEnd());
+            Assert.Equal(on, Type(keys, on: true), "ON: " + keys.TrimEnd());
+        }
+        Assert.Equal("ー＞", Type("->\n", on: false), "OFF: ->");
+        Assert.Equal("->", Type("->\n", on: true, half: ">"), "ON で > を半角にすれば ->");
+    }
+
+    [Test]
+    public static void SpaceCommitsSymbols_FollowsSetting()
+    {
+        // 設定「記号だけ打って Space で、確定して空白」。幅を決めた記号だけなら、候補を開かずに確定して空白を入れる
+        string Type(string keys, bool on, bool longVowel = true, string half = "#>*`", string full = "()")
+        {
+            var k = new Keyboard { SpaceCommitsSymbols = on, LongVowelOnlyAfterKana = longVowel, HalfWidthSymbols = half, FullWidthSymbols = full };
+            k.Type(keys);
+            return k.Host.Document;
+        }
+        foreach (var (keys, off, on) in new[]
+        {
+            ("# midasi\n", "#みだし", "# みだし"),
+            ("## midasi\n", "##みだし", "## みだし"),
+            ("> inyou\n", ">いにょう", "> いにょう"),
+            ("- item\n", "-item", "- item"),
+            ("* kore\n", "*これ", "* これ"),
+        })
+        {
+            Assert.Equal(off, Type(keys, on: false), "OFF: " + keys.TrimEnd());
+            Assert.Equal(on, Type(keys, on: true), "ON: " + keys.TrimEnd());
+        }
+        Assert.Equal("（ ", Type("( \n", on: true), "全角に決めた記号も同じ");
+        // 幅を決めていない記号・ー・記号の後ろにかななどがあるときは、今までどおり変換する
+        Assert.Equal("！", Type("! \n", on: true, half: ""), "幅を決めていない記号は今までどおり (候補を開き、最初の候補は ！)");
+        Assert.Equal("ー", Type("- \n", on: true, longVowel: false), "ー は今までどおり");
+        var k = new Keyboard { SpaceCommitsSymbols = true, HalfWidthSymbols = "#" };
+        k.Type("#kore ");
+        Assert.True(k.Host.View is { Converting: true }, "記号の後ろにかながあれば変換する");
+    }
+
+    [Test]
+    public static void Symbols_OtherWidthCandidate()
+    {
+        // 幅を決めた記号も、Space で変換すれば候補からもう一方の幅を選べる
+        var full = WithSymbolWidths("()", "", k => { k.Type("( "); return k.Host.View!.Candidates.ToList(); });
+        Assert.Equal("（", full[0]);
+        Assert.True(full.Contains("("), "（ の候補に ( がある: " + string.Join(",", full));
+        var half = WithSymbolWidths("", ">", k => { k.Type("> "); return k.Host.View!.Candidates.ToList(); });
+        Assert.Equal(">", half[0]);
+        Assert.True(half.Contains("＞"), "> の候補に ＞ がある: " + string.Join(",", half));
+    }
+
+    [Test]
+    public static void Symbols_SettingIsSaved()
+    {
+        var defaults = new Meltype.Config.Settings();
+        Assert.True(defaults.FullWidthSymbols == "" && defaults.HalfWidthSymbols == "", "既定は空 (今までどおり)");
+        // 幅を決められる記号だけを重複なく残す (英数字・空白・全角の文字・- , . / は捨てる)
+        Assert.Equal("()<>`", Meltype.Config.SymbolWidth.Clean("()a1 （<>`-,./<("), "記号だけ残す");
+        Assert.Equal("", Meltype.Config.SymbolWidth.Clean(null), "null は空");
+        var path = Path.Combine(Path.GetTempPath(), $"meltype-symbols-{Guid.NewGuid():N}.json");
         try
         {
-            File.WriteAllText(path, "{ \"SettingsVersion\": 5, \"FullWidthParentheses\": true }");
-            Assert.True(Meltype.Config.Settings.Load(path).FullWidthParentheses, "config.json から読む");
+            File.WriteAllText(path, "{ \"SettingsVersion\": 5, \"FullWidthSymbols\": \"() x\", \"HalfWidthSymbols\": \"<>`\\\"\\\\\" }");
+            var loaded = Meltype.Config.Settings.Load(path);
+            Assert.Equal("()", loaded.FullWidthSymbols, "全角にする記号");
+            Assert.Equal("<>`\"\\", loaded.HalfWidthSymbols, "半角にする記号 (\" と \\ は JSON の書き方)");
+            // 前の版の設定 (括弧専用の ON/OFF) が残っていても、読み込みは失敗しない
+            File.WriteAllText(path, "{ \"SettingsVersion\": 5, \"FullWidthParentheses\": true, \"SpaceAroundEnglish\": true }");
+            Assert.True(Meltype.Config.Settings.Load(path).SpaceAroundEnglish, "知らない項目は無視して読む");
+            Assert.True(!File.Exists(path + ".broken"), "設定は壊れた扱いにならない");
         }
         finally
         {
             File.Delete(path);
+            File.Delete(path + ".broken");
         }
     }
 
