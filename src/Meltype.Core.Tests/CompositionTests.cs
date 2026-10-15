@@ -1513,6 +1513,24 @@ internal static class CompositionTests
     }
 
     [Test]
+    public static void MacControl_M_CommitsWithoutNewline()
+    {
+        // Mac 式: Ctrl+M は確定 (Enter と同じ)。Ctrl+M をアプリに送ると、Ctrl+M を Enter にしているアプリ・キー割り当てのソフト
+        // (AutoHotkey の Emacs 風の ^m::Send "{Enter}") で改行まで入っていた
+        foreach (var converting in new[] { false, true })
+        {
+            var k = new Keyboard { ControlKeys = Meltype.Config.ControlKeyStyle.Mac };
+            k.Type("aiueo");
+            if (converting) k.Press(VirtualKeys.Space);
+            CtrlPress(k, 'M');
+            Assert.Equal("あいうえお", k.Host.Document, $"変換中 {converting}: 確定する");
+            // 押したままの Ctrl は、確定して変換ボックスが空になったらアプリに送る (続けて打つ Ctrl+キーのため)
+            Assert.True(!k.Host.Events.Any(e => e is "down:4D" or "passed:4D" or "down:0D" or "passed:0D"),
+                $"変換中 {converting}: M・Enter をアプリに送らない: " + string.Join(" ", k.Host.Events));
+        }
+    }
+
+    [Test]
     public static void MacControl_H_IsBackSpace()
     {
         // #150: Ctrl+H は Mac 式でも BackSpace (ATOK 式と同じ。macOS の日本語入力でも前の文字を消す)。変換中なら変換をやめてかなに戻す

@@ -2811,6 +2811,9 @@ public sealed class CompositionController
         ['V'] = new(VirtualKeys.PageDown),           // 候補の次のページ
         ['R'] = new(VirtualKeys.PageUp),             // 候補の前のページ
         ['H'] = new(VirtualKeys.Back),               // BackSpace
+        // 確定 (Enter と同じ。Emacs の Ctrl+M。割り当てが無いと、確定してから Ctrl+M をアプリに送るので、
+        // Ctrl+M を Enter にしているアプリやキー割り当てのソフトでは改行まで入っていた)
+        ['M'] = new(VirtualKeys.Return),
     };
 
     /// <summary>

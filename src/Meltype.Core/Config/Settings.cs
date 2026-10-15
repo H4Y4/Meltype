@@ -235,7 +235,7 @@ public sealed class Settings
     public PunctuationStyle Punctuation { get; set; } = PunctuationStyle.Japanese;
 
     [Category("1. 全般"), DisplayName("入力中の Ctrl キー"),
-     Description("変換ボックスに文字があるときの Ctrl+キーの割り当てです。「ATOK と同じ」は Ctrl+U/I/O/P でひらがな・カタカナ・半角英数・全角英数にします。「Mac と同じ」は Ctrl+J/K/L でひらがな・カタカナ・全角英数、Ctrl+;/:/' で半角英数にし、Ctrl+N/P で候補、Ctrl+F/B で文節の移動、Ctrl+W/O/I で文節の伸び縮み、Ctrl+V/R で候補のページ送りをします。「ATOK と同じ」の Ctrl+O は半角英数で、Microsoft IME の Ctrl+O (半角カタカナ) とは違います (Microsoft IME の Ctrl+T (半角英数) はありません)。入力が空のときの Ctrl+キーは、どちらでもアプリにそのまま渡します。Ctrl+H は、どちらでも BackSpace です。Meltype IME (TSF) では Ctrl+H/U/I/O/P だけが使え、「Mac と同じ」のほかのキーは効きません (変換中に押すと確定してアプリに渡します)。")]
+     Description("入力中 (変換ボックス・Meltype IME の変換中) の Ctrl+キーの割り当てです。動作モードによらず、Meltype キーボードでも Meltype IME でも同じに効きます。「ATOK と同じ」は Ctrl+U/I/O/P でひらがな・カタカナ・半角英数・全角英数にします。「Mac と同じ」は Ctrl+J/K/L でひらがな・カタカナ・全角英数、Ctrl+;/:/' で半角英数にし、Ctrl+N/P で候補、Ctrl+F/B で文節の移動、Ctrl+W/O/I で文節の伸び縮み、Ctrl+V/R で候補のページ送り、Ctrl+M で確定 (Enter と同じ。改行は入れません) をします。「ATOK と同じ」の Ctrl+O は半角英数で、Microsoft IME の Ctrl+O (半角カタカナ) とは違います (Microsoft IME の Ctrl+T (半角英数) はありません)。入力が空のときの Ctrl+キーは、どちらでもアプリにそのまま渡します。Ctrl+H は、どちらでも BackSpace です。")]
     public ControlKeyStyle ControlKeys { get; set; } = ControlKeyStyle.Atok;
 
     [Category("1. 全般"), DisplayName("英字の後ろの , . も句読点にする"),
