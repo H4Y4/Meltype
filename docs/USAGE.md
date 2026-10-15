@@ -221,6 +221,19 @@ Meltype キーボードを使っている間は、Windows の IME (Microsoft IME
 - **ライブ変換**: 4 文字以上の日本語は、Space を押さなくても打ったそばから漢字で表示します。短い語は Space で変換してください (設定で OFF にできます)。
 - **英単語の前後に半角スペース**: 設定の「全般」で ON にすると、確定するときに日本語と英単語の間に半角スペースを入れます (今日は GitHub に push した)。数字だけの語 (3時) と記号 (、。) の隣には入れません。最初は OFF です。
 - **入力中の Ctrl キー**: 設定の「全般」で、変換ボックスに文字があるときの Ctrl+キーの割り当てを「ATOK と同じ (Ctrl+U/I/O/P)」(既定) か「Mac と同じ (Ctrl+J/K/L など)」から選べます。割り当ては上のキー操作の表のとおりです。割り当ての無い Ctrl+キー (Ctrl+C など) は、どちらでも確定してからアプリに渡します。Windows の画面で選ぶほか、`config.json` の `"ControlKeys"` に `Atok` / `Mac` を書きます (Mac・Linux 版はこちら)。書いていないときは `Atok` です (ほかの列挙型の設定と同じく、名前の大文字小文字は問いません。知らない名前を書くと、`config.json` 全体が読めなかったものとして既定値に戻り、元のファイルは `config.json.broken` に残ります)。Mac の Ctrl+F / Ctrl+B は macOS の日本語入力と同じ (次の文節 / 前の文節) です。「ATOK と同じ」の Ctrl+O は半角英数で、Microsoft IME の Ctrl+O (半角カタカナ) とは違います (Microsoft IME の Ctrl+T (半角英数) はありません。半角カタカナは F8)。
+- **キーの割り当てを変えるソフトと一緒に使う (AutoHotkey など)**: Meltype は、入力中 (変換ボックス・Meltype IME の変換中) の間だけ、名前付きのイベント `Local\Meltype.Composing` をシグナル状態にします。Emacs 風の割り当てなど、Ctrl+キーを別のキーに変えるソフトでは、入力中だけ Meltype の割り当て (Mac 式の Ctrl+K カタカナなど) を優先できます。AutoHotkey v2 の例:
+
+  ```ahk
+  MeltypeComposing() {
+      static handle := 0
+      if (!handle)
+          handle := DllCall("OpenEvent", "UInt", 0x00100000, "Int", 0, "Str", "Local\Meltype.Composing", "Ptr")
+      return handle && DllCall("WaitForSingleObject", "Ptr", handle, "UInt", 0) = 0
+  }
+  #HotIf not MeltypeComposing()
+  ^k::Send "{ShiftDown}{End}{ShiftUp}^x"  ; 入力していないときだけ行末まで切り取る
+  #HotIf
+  ```
 - **句読点**: 設定の「全般」で、`,` と `.` を打ったときの句読点を Microsoft IME と同じ 4 通り「、。」「，．」「，。」「、．」から選べます (論文などで「，．」を使うとき)。最初は「、。」です。かな入力の 、 。 のキーにも効きます。数字の間の `.` `,` (1.5、1,000) は半角のままです。Mac・Linux 版では `config.json` の `"Punctuation"` に `Japanese` (、。) / `FullWidthCommaPeriod` (，．) / `FullWidthCommaKuten` (，。) / `ToutenFullWidthPeriod` (、．) を書きます。
 - **英字の後ろの , . も句読点にする**: 変換ボックスの中が英字だけのとき (`IME.`) は、`,` `.` を英文の記号として半角のままにします。設定の「全般」で ON にすると、英字のすぐ後ろの `,` `.` も句読点 (`IME。`、`IME、`) にします。ON でも、キャレットの前が英語のとき (`Hello ` に続けて `world.`) と、英単語の中の `.` (tetr.io) は半角のままです。最初は OFF です。Mac・Linux 版では `config.json` の `"JapanesePunctuationAfterEnglish": true` で ON にします。
 - **括弧 ( ) を全角にする**: 日本語入力で打った `(` `)` は半角のままです。設定の「全般」で ON にすると、全角の（ ）にします (Mac の日本語入力と同じ)。英単語を囲むとき (`人工知能（AI）`) も、英文の続きでも全角です。半角にしたいときは、Space で変換して候補から半角の `(` `)` を選びます。ON でも、URL の中、`/` のすぐ後ろ (`app/(auth)/login`)、パスのすぐ後ろ (`~/dir(1)/a.txt`) の括弧は半角のままです。最初は OFF です。Mac・Linux 版では `config.json` の `"FullWidthParentheses": true` で ON にします。

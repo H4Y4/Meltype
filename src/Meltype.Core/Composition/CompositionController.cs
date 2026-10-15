@@ -2924,6 +2924,16 @@ public sealed class CompositionController
         ['\''] = new(VirtualKeys.F10),
     };
 
+    /// <summary>
+    /// 入力中の Ctrl+キーに割り当てのあるキーの一覧 (英字は大文字、記号はその文字)。Meltype IME の DLL は、変換中にこのキーを
+    /// 確定せずに Meltype.exe へ送る。DLL に一覧を決め打ちで持たせないのは、DLL がアプリに読み込まれたままになり、
+    /// 割り当てを変えてもアプリを開き直すまで効かないため (Meltype.exe の更新だけで効くように、Meltype.exe から渡す)。
+    /// </summary>
+    internal static string ControlShortcutKeys(Config.ControlKeyStyle style) =>
+        style == Config.ControlKeyStyle.Mac
+            ? string.Concat(MacControlKeys.Keys.Select(vk => (char)vk)) + string.Concat(MacControlChars.Keys)
+            : string.Concat(AtokControlKeys.Keys.Select(vk => (char)vk));
+
     /// <summary>入力中に Ctrl と一緒に押したキーの割り当て。無ければ null (確定してからアプリへ送る)。</summary>
     private ControlAction? ControlShortcut(KeyEvent e)
     {

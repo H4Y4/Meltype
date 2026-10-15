@@ -84,6 +84,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
         });
         _engine.AttachComposition(_composition);
         _tipServer = new Tip.TipServer(_invoker, _composition, () => _engine.Settings);
+        // Meltype を更新する前から動いているアプリは、古い Meltype IME を読み込んだまま (開き直すまで新しい機能が効かない)
+        _tipServer.OutdatedClient += app => ShowBalloonTip(8000, "Meltype IME",
+            $"{app} は更新する前の Meltype IME を読み込んだままです。{app} を終了して開き直すと、入力中の Ctrl キー (Mac 式) などが効くようになります。");
         _tipServer.Start();
         IntroduceTsf();
 

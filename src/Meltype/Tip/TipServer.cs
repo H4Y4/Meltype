@@ -20,7 +20,8 @@ namespace Meltype.Tip;
 ///
 /// やり取りは 1 メッセージ 1 JSON (UTF-8)。要求:
 ///   {"op":"key","sid":"…","vk":65,"ch":97,"mods":1,"before":"…","after":"…","process":"notepad","moved":true,"composing":true,"code":true}
-///   {"op":"commit","sid":"…","moved":true} / {"op":"select","sid":"…","index":2,"prediction":true} / {"op":"close","sid":"…"} / {"op":"hello","process":"…"}
+///   {"op":"commit","sid":"…","moved":true} / {"op":"select","sid":"…","index":2,"prediction":true} / {"op":"close","sid":"…"} / {"op":"hello","process":"…","protocol":2}
+/// hello の protocol は DLL のやり取りの版 (TipProtocol)。付けない・古い DLL は、Meltype を更新する前から動いているアプリが読み込んだままのもの。
 ///   {"op":"toggle","sid":"…","process":"…","before":"…","japanese":true} (半角/全角。consumed が true なら、コードの行を日本語にした / 英数に戻した)
 ///   {"op":"mode","sid":"…","process":"…","before":"…","passed":37,"ctrl":true} (キャレットが動いた・文字が変わった。入力モードの表示を合わせる)
 /// select の prediction は、予測変換の候補を選んだこと (付けなければ変換の候補)。
@@ -29,7 +30,8 @@ namespace Meltype.Tip;
 /// passed は、DLL がアプリに通したキー (0 はキーなしでキャレットが動いた、-1 は文字が変わっただけ)。key・toggle にも、まだ伝えていなければ付ける。
 /// 応答: {"active":true, "consumed":…, "commits":[…], "view":{…}, "code":…, "english":…} (active が false なら DLL は何もせずにキーを通す)
 /// code はコードの入力欄か、english は次に打つキーがコードの行なので英数のまま通るか (DLL はタスクバーに「A」を出す)。
-/// macControlKeys は、入力中の Ctrl+キーが Mac 式か (hello と key の応答に付ける。DLL は変換中に Meltype.exe へ送る Ctrl+キーを選ぶ)。
+/// macControlKeys は、入力中の Ctrl+キーが Mac 式か。controlKeys は、変換中に確定せずに Meltype.exe へ送る Ctrl+キーの一覧 (英字は大文字、
+/// 記号はその文字)。どちらも hello と key の応答に付ける。DLL は controlKeys があればそれに従い、無ければ (古い Meltype.exe) macControlKeys で選ぶ。
 /// moved は、前に確定してからキャレットが動いたかもしれないこと (前の語を確定し直さない)。
 /// commits の確定し直し (deleteBefore) には、消す文字 (expect) を付ける。DLL は入力欄の文字が同じときだけ消す。
 /// sid は DLL が入力欄 (スレッド) ごとに振る ID。入力の本体はつながり (パイプ) ごとに持ち、すべて UI スレッドで動かす。
@@ -429,6 +431,8 @@ internal sealed class TipServer : IDisposable
         {
             pipe.Dispose();
             Interlocked.Decrement(ref _connections);
+            // アプリが変換中のまま終わった: 入力中の印を外す
+            Composition.ComposingSignal.Update(sessions, false);
             if (sessions.Count > 0 && !_stop.IsCancellationRequested)
             {
                 try { Invoke(() => { sessions.Clear(); return ""; }); } catch { }
@@ -469,7 +473,27 @@ internal sealed class TipServer : IDisposable
     /// <summary>ログに書くアプリの名前の数の上限。</summary>
     private const int MaxGreeted = 256;
 
+    /// <summary>要求を処理して応答を返す。処理した後に、このつながりで入力中かを公開する (ComposingSignal)。UI スレッドで呼ぶ。</summary>
     private string Handle(string request, Dictionary<string, MeltypeSession> sessions)
+    {
+        var reply = HandleRequest(request, sessions);
+        Composition.ComposingSignal.Update(sessions, sessions.Values.Any(session => session.IsComposing));
+        return reply;
+    }
+
+    /// <summary>
+    /// DLL がつながるときに名乗るやり取りの版 (hello の protocol)。これより古い DLL (名乗らない DLL を含む) は、
+    /// Meltype を更新する前から動いているアプリが読み込んだままのもので、新しい機能 (入力中の Ctrl キーの Mac 式など) が効かない。
+    /// </summary>
+    public const int TipProtocol = 2;
+
+    /// <summary>古い DLL を読み込んだままのアプリがつながってきた (アプリの名前。アプリごとに 1 回)。UI スレッドで呼ばれる。</summary>
+    public event Action<string>? OutdatedClient;
+
+    // 古い DLL を知らせたアプリ
+    private readonly HashSet<string> _outdated = new(StringComparer.OrdinalIgnoreCase);
+
+    private string HandleRequest(string request, Dictionary<string, MeltypeSession> sessions)
     {
         // 終わる途中 (変換エンジンなどを片付けた後) には何もしない
         if (_stop.IsCancellationRequested) return Inactive;
@@ -488,9 +512,15 @@ internal sealed class TipServer : IDisposable
                 var shown = new string(process.Where(c => !char.IsControl(c) && !char.IsSurrogate(c) && char.GetUnicodeCategory(c) != System.Globalization.UnicodeCategory.Format).Take(64).ToArray());
                 if (greeting && _greeted.Count < MaxGreeted && _greeted.Add(shown)) Log.Info($"Meltype IME: {shown} からつながりました。");
                 if (!greeting) return Inactive;
+                // Meltype を更新する前から動いているアプリは、古い DLL を読み込んだまま (アプリを開き直すまで新しい DLL にならない)
+                if (Int(root, "protocol") < TipProtocol && _outdated.Count < MaxGreeted && _outdated.Add(shown))
+                {
+                    Log.Warn($"Meltype IME: {shown} は古い Meltype IME を読み込んだままです。アプリを開き直すと、入力中の Ctrl キー (Mac 式) などが効くようになります。");
+                    OutdatedClient?.Invoke(shown);
+                }
                 // コードエディター・ターミナルのアプリか (DLL は、キャレットが動くたびに入力モードの表示を問い合わせる)
                 var codeApp = _settings().ProfileFor(process + ".exe") == AppProfile.Code;
-                return $"{{\"active\":true,\"code\":{(codeApp ? "true" : "false")},\"directDetection\":{(DirectDetectionFor(process) ? "true" : "false")},\"macControlKeys\":{(MacControlKeys ? "true" : "false")},\"consumed\":false,\"commits\":[],\"view\":null}}";
+                return $"{{\"active\":true,\"code\":{(codeApp ? "true" : "false")},\"directDetection\":{(DirectDetectionFor(process) ? "true" : "false")},\"macControlKeys\":{(MacControlKeys ? "true" : "false")},\"controlKeys\":{ControlKeysJson},\"consumed\":false,\"commits\":[],\"view\":null}}";
             }
             case "close":
                 if (sessions.Remove(sid, out var closing) && closing.IsComposing) closing.CommitPending();
@@ -583,13 +613,19 @@ internal sealed class TipServer : IDisposable
     /// <summary>入力中の Ctrl+キーが Mac 式か。DLL は、変換中に確定せずに Meltype.exe へ送る Ctrl+キーをこれで選ぶ (Ctrl+J/K/L/N/F/B …)。</summary>
     private bool MacControlKeys => _settings().ControlKeys == ControlKeyStyle.Mac;
 
+    /// <summary>
+    /// 変換中に確定せずに Meltype.exe へ送る Ctrl+キーの一覧 (JSON の文字列。英字は大文字、記号はその文字)。DLL は受け取った一覧に従う
+    /// (DLL に決め打ちすると、割り当てを変えてもアプリを開き直すまで効かない)。
+    /// </summary>
+    private string ControlKeysJson => JsonSerializer.Serialize(CompositionController.ControlShortcutKeys(_settings().ControlKeys));
+
     private string Reply(bool active, SessionResult result, bool code, bool english, bool? directDetection,
         bool switchedToJapanese = false, bool? directEnglishWord = null)
     {
         var json = result.ToJson();
         var detection = directDetection is { } enabled ? $"\"directDetection\":{(enabled ? "true" : "false")}," : "";
         var englishWord = directEnglishWord is { } isEnglishWord ? $"\"directEnglishWord\":{(isEnglishWord ? "true" : "false")}," : "";
-        return $"{{\"active\":{(active ? "true" : "false")},\"code\":{(code ? "true" : "false")},\"english\":{(english ? "true" : "false")},{detection}{englishWord}\"macControlKeys\":{(MacControlKeys ? "true" : "false")},\"switchToJapanese\":{(switchedToJapanese ? "true" : "false")},{json[1..]}";
+        return $"{{\"active\":{(active ? "true" : "false")},\"code\":{(code ? "true" : "false")},\"english\":{(english ? "true" : "false")},{detection}{englishWord}\"macControlKeys\":{(MacControlKeys ? "true" : "false")},\"controlKeys\":{ControlKeysJson},\"switchToJapanese\":{(switchedToJapanese ? "true" : "false")},{json[1..]}";
     }
 
     /// <summary>

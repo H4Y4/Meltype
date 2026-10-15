@@ -627,6 +627,8 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
 
     public void Show(CompositionView view)
     {
+        // 入力中であることを、ほかのソフト (AutoHotkey の Emacs 風の割り当てなど) に知らせる
+        ComposingSignal.Update(this, true);
         if (_window.Visible)
         {
             // 確定した文字の分だけ右へ (同じ位置のままだと、確定した文字を変換ボックスが隠してしまう: issue #57)。
@@ -707,6 +709,7 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
 
     public void Hide()
     {
+        ComposingSignal.Update(this, false);
         _committedWhileVisible = "";
         if (_window.Visible) _window.Hide();
     }

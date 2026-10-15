@@ -89,10 +89,18 @@ bool IsAltGraveToggle(UINT vk, LPARAM lParam) {
 
 wchar_t CharOf(UINT vk, LPARAM lParam);
 
-// 変換中に Meltype.exe が受け持つ Ctrl+キー (CompositionController の AtokControlKeys・MacControlKeys・MacControlChars と合わせる)。
-// Alt・Windows キーと一緒なら違う。mac は設定「入力中の Ctrl キー」が Mac 式か
-bool IsCompositionShortcut(UINT vk, LPARAM lParam, bool mac) {
+// 変換中に Meltype.exe が受け持つ Ctrl+キー。Alt・Windows キーと一緒なら違う。
+// keys は Meltype.exe が応答で渡す一覧 (CompositionController.ControlShortcutKeys。英字は大文字、記号はその文字)。
+// 一覧を DLL に決め打ちすると、DLL はアプリに読み込まれたままなので、割り当てを変えてもアプリを開き直すまで効かない。
+// 一覧が無い (古い Meltype.exe) ときだけ、mac (設定「入力中の Ctrl キー」が Mac 式か) で下の表を使う
+bool IsCompositionShortcut(UINT vk, LPARAM lParam, bool mac, const std::wstring& keys) {
     if (!KeyDown(VK_CONTROL) || KeyDown(VK_MENU) || KeyDown(VK_LWIN) || KeyDown(VK_RWIN)) return false;
+    if (!keys.empty()) {
+        if (vk >= 'A' && vk <= 'Z') return keys.find(static_cast<wchar_t>(vk)) != std::wstring::npos;
+        // 記号は打った文字で見る。: は Shift を押さずに打つキー (JIS 配列) だけ (US 配列の Ctrl+Shift+; は OS の英数切り替え)
+        wchar_t c = CharOf(vk, lParam);
+        return c != 0 && !(c == L':' && KeyDown(VK_SHIFT)) && keys.find(c) != std::wstring::npos;
+    }
     if (!mac) return vk == 'H' || vk == 'U' || vk == 'I' || vk == 'O' || vk == 'P';
     switch (vk) {
         case 'J': case 'K': case 'L': case 'N': case 'P': case 'F': case 'B':
@@ -649,9 +657,11 @@ bool TextService::ServerReady() {
 void TextService::Hello() {
     lastHello_ = GetTickCount64();
     JsonValue reply;
-    serverActive_ = Request("{\"op\":\"hello\",\"process\":" + JsonString(ProcessName()) + "}", reply) && reply[L"active"].Bool();
+    // protocol: やり取りの版 (TipServer.TipProtocol と合わせる)。Meltype.exe は、名乗らない古い DLL のアプリに開き直すよう知らせる
+    serverActive_ = Request("{\"op\":\"hello\",\"process\":" + JsonString(ProcessName()) + ",\"protocol\":2}", reply) && reply[L"active"].Bool();
     directDetection_ = serverActive_ && reply[L"directDetection"].Bool();
     macControlKeys_ = serverActive_ && reply[L"macControlKeys"].Bool();
+    controlKeys_ = serverActive_ ? reply[L"controlKeys"].Str() : std::wstring();
     directEnglishWord_ = false;
     // コードエディター・ターミナルのアプリなら、キャレットが動くたびに入力モードの表示を合わせる (QueryMode)
     codeApp_ = serverActive_ && reply[L"code"].Bool();
@@ -715,7 +725,7 @@ bool TextService::WouldEat(ITfContext* context, UINT vk, LPARAM lParam, wchar_t&
         // 受け取らずに通す (受け取ってから送り直すと、送り直しが届かないアプリでキーが消える)。
         // ここで確定できなければ受け取り、キーの処理の中で確定してから送り直す (キーが先に届いて、確定が後になるのを防ぐ)
         // ただし変換ボックスの中で使う Ctrl+キー (ATOK 式の Ctrl+U/I/O/P、Mac 式の Ctrl+J/K/L・N/P・F/B など、どちらも Ctrl+H は BackSpace) は、確定せずに Meltype.exe に送る
-        if ((KeyDown(VK_CONTROL) || KeyDown(VK_MENU) || KeyDown(VK_LWIN) || KeyDown(VK_RWIN)) && !IsCompositionShortcut(vk, lParam, macControlKeys_) && CommitNow()) return false;
+        if ((KeyDown(VK_CONTROL) || KeyDown(VK_MENU) || KeyDown(VK_LWIN) || KeyDown(VK_RWIN)) && !IsCompositionShortcut(vk, lParam, macControlKeys_, controlKeys_) && CommitNow()) return false;
         return true;  // 変換中はほかのキーを全部受け取る (つながらなければ確定して通す)
     }
     // 半角/全角: 日本語 ⇔ 英数 (IME の ON/OFF は IME 自身が切り替える)。Meltype.exe が使えないときも受け取る
@@ -914,6 +924,7 @@ void TextService::HandleKey(ITfContext* context, UINT vk, wchar_t ch) {
         directDetection_ = serverActive_ && reply[L"directDetection"].Bool();
         directEnglishWord_ = directDetection_ && reply[L"directEnglishWord"].Bool();
         macControlKeys_ = serverActive_ && reply[L"macControlKeys"].Bool();
+        controlKeys_ = serverActive_ ? reply[L"controlKeys"].Str() : std::wstring();
         switchToJapanese = reply[L"switchToJapanese"].Bool();
         consumed_ = reply[L"consumed"].Bool();
         ApplyMode(reply);

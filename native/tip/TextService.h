@@ -152,6 +152,7 @@ private:
     bool directDetection_ = false; // 英数状態でもローマ字検知が有効 (Meltype.exe の応答)
     bool directEnglishWord_ = false;
     bool macControlKeys_ = false;  // 入力中の Ctrl+キーが Mac 式 (Meltype.exe の応答の macControlKeys)
+    std::wstring controlKeys_;     // 変換中に Meltype.exe へ送る Ctrl+キーの一覧 (応答の controlKeys。空なら macControlKeys_ で決め打ちの表を使う)
     ULONGLONG lastHello_ = 0;
     bool open_ = true;
     bool codeApp_ = false;         // コードエディター・ターミナル (Meltype.exe の応答の code)

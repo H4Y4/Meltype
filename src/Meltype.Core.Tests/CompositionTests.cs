@@ -1564,6 +1564,17 @@ internal static class CompositionTests
     }
 
     [Test]
+    public static void ControlShortcutKeys_ListsAssignedKeysForTheImeDll()
+    {
+        // Meltype IME の DLL は、変換中にこの一覧のキーを確定せずに Meltype.exe へ送る (DLL に決め打ちしない: 開き直さなくても効くように)
+        var mac = CompositionController.ControlShortcutKeys(Meltype.Config.ControlKeyStyle.Mac);
+        foreach (var key in "JKLNPFBWOIVRHM;:'") Assert.True(mac.Contains(key), $"Mac 式に {key}: {mac}");
+        Assert.True(!mac.Contains('U') && !mac.Contains('C'), "割り当ての無いキーは入れない: " + mac);
+        var atok = CompositionController.ControlShortcutKeys(Meltype.Config.ControlKeyStyle.Atok);
+        Assert.Equal("HIOPU", string.Concat(atok.Order()), "ATOK 式は H/U/I/O/P");
+    }
+
+    [Test]
     public static void PassedControl_ShortcutsWorkWhileCtrlReachesApp()
     {
         // Windows: 指で押した Ctrl は変換中も握りつぶさずにアプリ (と後ろのフック: AutoHotkey) へ通す。入力中の Ctrl+キーの割り当ては
