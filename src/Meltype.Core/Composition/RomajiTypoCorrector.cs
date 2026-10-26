@@ -233,6 +233,28 @@ public sealed class RomajiTypoCorrector
         return cost <= kana.Length / 2.0;
     }
 
+    /// <summary>
+    /// 英字の語 word を、前後の日本語 (before・after。打ったローマ字) とつなげて読んだ方が、語のところで区切るより自然な日本語になるか
+    /// (ki + meta = きめ|た、todo + keru = とどける)。区切ったときの語は、よく使う語 1 つと同じ重さに数える
+    /// (kore + todo = これ|と|ど より これ|todo)。同じくらいなら false (区切る)。どれかがローマ字として読めなければ false。
+    /// </summary>
+    public bool ReadsAsJapanese(string before, string word, string after)
+    {
+        if (Kana(before, partial: false) is not { } head || Kana(word, partial: false) is not { } middle || Kana(after, partial: true) is not { } tail) return false;
+        var joined = Segment(head + middle + tail, -1).Cost;
+        var split = Segment(head, -1).Cost + 1 + Segment(tail, -1).Cost;
+        return joined < split;
+    }
+
+    /// <summary>英字をかなにする。partial なら末尾の打ちかけの子音は捨てる (しなければ読み切れないときは null)。</summary>
+    private string? Kana(string letters, bool partial)
+    {
+        var analysis = _romaji.AnalyzeFragment(letters.ToLowerInvariant());
+        if (!analysis.IsValid) return null;
+        if (analysis.Partial == "n") return analysis.Kana + "ん";
+        return analysis.Partial.Length == 0 || partial ? analysis.Kana : null;
+    }
+
     /// <summary>ローマ字として読めない最初の文字の位置 (無ければ -1)。final でなければ語末の途中の子音は読めるとみなす。</summary>
     public int FirstUnreadable(string letters, bool final)
     {
