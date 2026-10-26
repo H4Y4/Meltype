@@ -118,7 +118,9 @@ public sealed partial class CompositionDetector
                     if (!CanBeEnglishSpan(i, j, j == n ? pending : "", j == n && !final, j < n ? units[j].Raw : null)) continue;
                     if (PrecededByEnglish(i) == true && IsSuruForm(Kana(units, i, j))) continue;
                     if (!IsEnglishSpan(Raw(units, i, j) + (j == n ? pending : ""), atEnd: j == n, before, after, startOfInput: i == 0, level, final, endsWord: symbolsAfter,
-                            unreadable: HasUnreadable(units, i, j) || EndsWithLoneSokuon(units, j), next: j < n ? units[j].Raw + (j + 1 == n ? pending : "") : null,
+                            unreadable: HasUnreadable(units, i, j) || EndsWithLoneSokuon(units, j) ||
+                                j == n && EndsWithEnglishConsonant(Raw(units, i, j), pending, final, e == 0 && i > path.JapaneseStart ? Raw(units, path.JapaneseStart, i) : null),
+                            next: j < n ? units[j].Raw + (j + 1 == n ? pending : "") : null,
                             previous: e == 0 && i > path.JapaneseStart ? Raw(units, path.JapaneseStart, i) : null, rest: j < n ? Raw(units, j, n) + pending : null)) continue;
                     Offer(j, true, Extend(path, i, j, units, pending));
                     offeredEnglish = true;
