@@ -390,7 +390,11 @@ public sealed class CompositionController
         // よく使う日本語の読み (kyouha = 今日は) は、一度英字にして確定しただけでは英語として覚えない。
         if (_options.Languages is { } languages && _options.RomajiTypos is { } typos) languages.IsCommonJapanese ??= typos.IsCommonJapanese;
         if (_options.Languages is { } memory) memory.IsReadableRomaji ??= word => detector.Romaji.AnalyzeFragment(word) is { IsValid: true, Partial: "" };
-        if (_options.RomajiTypos is { } lexicon) detector.IsCommonJapanese ??= lexicon.IsCommonJapanese;
+        if (_options.RomajiTypos is { } lexicon)
+        {
+            detector.IsCommonJapanese ??= lexicon.IsCommonJapanese;
+            detector.ReadsAsJapanese ??= lexicon.ReadsAsJapanese;
+        }
         _text.CorrectTypos = () => _options.CorrectTypos();
         _text.SlashAsMiddleDot = () => _options.SlashAsMiddleDot();
         _text.ZSymbols = () => _options.ZSymbols();

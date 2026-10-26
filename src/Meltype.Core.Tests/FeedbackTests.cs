@@ -778,6 +778,34 @@ internal static class LanguageLearningTests
         }
     }
 
+    [Test]
+    public static void LearnedWord_DoesNotSplitJapaneseWord()
+    {
+        // 一度 meta を英字で確定したら、決めた (kimeta) が きmeta になっていた。
+        // 前後の日本語とつなげて読んだ方が自然な日本語になるときだけ日本語にし、区切っても自然なら覚えたとおり英字。
+        var memory = new LanguageMemory(null);
+        memory.Remember("meta", english: true, explicitChoice: true);
+        memory.Remember("todo", english: true, explicitChoice: true);
+        CompositionTests.Detector.Memory = memory;
+        try
+        {
+            foreach (var (typed, expected) in new[]
+            {
+                ("kimeta\n", "きめた"), ("kimetakoto\n", "きめたこと"), ("todokeru\n", "とどける"),
+                ("meta\n", "meta"), ("kyouhameta\n", "きょうはmeta"), ("koretodo\n", "これtodo"), ("todowokaku\n", "todoをかく"),
+            })
+            {
+                var k = new CompositionTests.Keyboard(languages: memory);
+                k.Type(typed);
+                Assert.Equal(expected, k.Host.Document, typed);
+            }
+        }
+        finally
+        {
+            CompositionTests.Detector.Memory = null;
+        }
+    }
+
 
 
     [Test]

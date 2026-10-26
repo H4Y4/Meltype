@@ -95,6 +95,12 @@ public sealed partial class CompositionDetector
     /// <summary>英字の並びが、ローマ字としてよく使う日本語になるか (kyouha = 今日は、tomato = とまと)。無ければ使わない。</summary>
     public Func<string, bool>? IsCommonJapanese { get; set; }
 
+    /// <summary>
+    /// 英字の語を、前後の日本語 (打ったローマ字) とつなげて読んだ方が自然な日本語になるか (ki + meta + "" = きめた)。
+    /// 引数は前・語・後ろ。無ければ使わない。
+    /// </summary>
+    public Func<string, string, string, bool>? ReadsAsJapanese { get; set; }
+
     public ProperNouns ProperNouns => _proper;
 
     /// <summary>
@@ -402,7 +408,8 @@ public sealed partial class CompositionDetector
                 var english = kanaInput
                     ? IsEnglishSpanKana(Raw(units, i, j), Kana(units, i, j), atEnd: j == n, BeforeScore(i), after, level, final, Kana(units, j, Math.Min(n, j + 2)))
                     : IsEnglishSpan(Raw(units, i, j) + (j == n ? pending : ""), atEnd: j == n, BeforeScore(i), after, startOfInput: i == 0, level, final, endsWord: symbolsAfter,
-                        unreadable: HasUnreadable(units, i, j) || EndsWithLoneSokuon(units, j), next: j < n ? units[j].Raw + (j + 1 == n ? pending : "") : null);
+                        unreadable: HasUnreadable(units, i, j) || EndsWithLoneSokuon(units, j), next: j < n ? units[j].Raw + (j + 1 == n ? pending : "") : null,
+                        previous: i > japaneseStart ? Raw(units, japaneseStart, i) : null, rest: j < n ? Raw(units, j, n) + pending : null);
                 if (english)
                 {
                     found = j;
@@ -598,6 +605,19 @@ public sealed partial class CompositionDetector
     public static bool IsReadableEnglishWord(string lower) => ReadableEnglish.Value.ContainsWord(lower);
 
     /// <summary>
+    /// 語 lower を、前後の日本語 (previous の末尾・following の先頭の、語に接している英字) とつなげて読んだ方が自然な日本語になるか
+    /// (ki + meta = きめた、todo + keru = とどける)。前後のどちらにも英字が無ければ false。
+    /// </summary>
+    private bool JoinsJapanese(string? previous, string lower, string? following)
+    {
+        var head = previous is null ? "" : previous[(previous.AsSpan().LastIndexOfAnyExcept(Letters) + 1)..];
+        var tail = following is null ? "" : following.AsSpan().IndexOfAnyExcept(Letters) is var stop and >= 0 ? following[..stop] : following;
+        return (head.Length > 0 || tail.Length > 0) && ReadsAsJapanese?.Invoke(head, lower, tail) == true;
+    }
+
+    private static readonly System.Buffers.SearchValues<char> Letters = System.Buffers.SearchValues.Create("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
+
+    /// <summary>
     /// 知っている英単語か (同梱の辞書・固有名詞・ユーザーが英字に直して覚えた語・4 文字以上ならスペルチェッカー)。
     /// python + no の n のように、英単語の最後の n と次の音がくっつくのを防ぐのに使う。
     /// </summary>
@@ -675,7 +695,10 @@ public sealed partial class CompositionDetector
     /// <param name="final">打ち終わった (Space・Enter)。末尾の区間でも、英単語の打ちかけ (amaz) は英語の根拠にしない。</param>
     /// <param name="unreadable">区間にローマ字として読めなかった英字がある (zoom + de の m、bug + wo の g)。</param>
     /// <param name="endsWord">区間の後ろが記号だけ (let's go! の go)。語はそこで打ち終わっているので、短い語も末尾の語と同じく見る。</param>
-    private bool IsEnglishSpan(string span, bool atEnd, int before, bool? after, bool startOfInput, DetectionLevel level, bool final = false, bool unreadable = false, string? next = null, bool endsWord = false)
+    /// <param name="previous">区間のすぐ前の、変換ボックスの中の日本語の区間の打った文字 (ki|meta の ki)。無ければ null。</param>
+    /// <param name="rest">区間の後ろの、変換ボックスの中の打った文字すべて (todo|keru の keru)。無ければ null。</param>
+    private bool IsEnglishSpan(string span, bool atEnd, int before, bool? after, bool startOfInput, DetectionLevel level, bool final = false, bool unreadable = false, string? next = null, bool endsWord = false,
+        string? previous = null, string? rest = null)
     {
         // まだ続きを打つかもしれない末尾の区間 (打ちかけの英単語を英語と見てよい)。
         var growing = atEnd && !final;
@@ -742,9 +765,13 @@ public sealed partial class CompositionDetector
         // ローマ字として最後まで読めても日本語の語にならない英単語 (english-readable.txt)。Manual の後・助詞誤分割除外の後で確定する。
         // ただし、すぐ後ろが ん (image|n|za|i) なら、語の最後の音の続き: 日本語の途中 (いまげんざい = 今現在、issue #1175)。
         if (readableEnglish && !NasalContinues(lower, next)) return true;
-        // ユーザーが英字 / かなに直して覚えた語。ただし短くてローマ字として読める語 (go、no) は、日本語のすぐ後ろ
-        // (nihon|go) では使わない (一度 go を英字で確定しただけで、日本語 が にほんgo になっていた)。
-        if (Memory?.Get(lower) is { } learned && !(learned && before < 0 && lower.Length <= 3 && Fragment() is { IsValid: true, Partial: "" })) return learned;
+        // ユーザーが英字 / かなに直して覚えた語。ただしローマ字として読める語は、日本語の中では使わないことがある:
+        // - 短い語 (go、no) は、日本語のすぐ後ろ (nihon|go) では使わない (一度 go を英字で確定しただけで、日本語 が にほんgo になっていた)。
+        // - 変換ボックスの中で前後に接する日本語とつなげて読んだ方が自然な日本語になる (ki|meta = 決めた、todo|keru = 届ける) なら使わない
+        //   (一度 meta を英字で確定しただけで、決めた が きmeta になっていた)。区切っても自然 (kore|todo、kyouha|meta) なら覚えたとおり英字。
+        if (Memory?.Get(lower) is { } learned && !(learned && Fragment() is { IsValid: true, Partial: "" } &&
+                (before < 0 && lower.Length <= 3 || JoinsJapanese(previous, lower, rest))))
+            return learned;
         // 5 文字以上の英単語で、ローマ字としても読めるもの:
         // - c 行の綴り (camera、coffee、class) は英語。日本語を打つときは k を使う (カメラ は kamera)。
         // - ローマ字として読むと ぢ・づ になる綴り (radio = らぢお、studio、audio) で、ふつうの日本語の語にならないなら英語。
