@@ -19,7 +19,7 @@ Python JavaScript TypeScript Java Kotlin Swift Rust Ruby PHP Perl Haskell Scala 
 Node Deno Bun Django Flask Rails Laravel Spring Next Nuxt Vite Webpack Tailwind Bootstrap jQuery
 MySQL PostgreSQL SQLite MongoDB Redis Oracle Elasticsearch Kafka Nginx Apache Tomcat
 Steam PlayStation Xbox Switch Minecraft Fortnite Roblox Valorant Apex Overwatch Tetris
-Uber Airbnb Tesla Paypal Stripe Shopify Etsy eBay
+Uber Airbnb Tesla Paypal Stripe Shopify Etsy eBay DLsite
 Visa Mastercard JCB Amex
 
 # 企業・ブランド
@@ -77,3 +77,5 @@ Suica DCafe ProBot Carlbot Disboard TaCZ NSFW
 Khalifa Ariana Grande Sheeran Marshmello Beabadoobee Chainsmokers Iann Dior Dobby
 # z + h/j/k/l の矢印 (zk = ↑) と重なる名前 (sync が英単語なので、↑Sync と読まれてしまう)
 zkSync
+# Issue #268
+DeVito

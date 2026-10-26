@@ -23,7 +23,8 @@ final class MeltypeInputController: IMKInputController, ModeServiceTarget {
     private var suggestionPanel: NSPanel?
     private var displayedSuggestion: String?
     /// ユーザー辞書・設定が変わった通知 (入力の本体を作り直して読み直す)。
-    private var reloadObservers: [NSObjectProtocol] = []
+    private var dictionaryObserver: NSObjectProtocol?
+    private var settingsObserver: NSObjectProtocol?
 
     override func activateServer(_ sender: Any!) {
         super.activateServer(sender)
@@ -56,23 +57,32 @@ final class MeltypeInputController: IMKInputController, ModeServiceTarget {
         session = NativeCore.shared.createSession()
         NativeCore.shared.setDirect(session, directInput)
         NativeCore.shared.setCodeInput(session, codeInput)
-        // ユーザー辞書を取り込んだ・設定を読み込んだ (ほかの入力欄で): 入力の本体を作り直して、新しい辞書・設定を読む
-        for name in ["MeltypeUserDictionaryChanged", "MeltypeSettingsChanged"] {
-            reloadObservers.append(DistributedNotificationCenter.default().addObserver(
-                forName: Notification.Name(name), object: nil, queue: .main
-            ) { [weak self] _ in
-                guard let self else { return }
-                self.commitComposition(self.client())
-                NativeCore.shared.destroySession(self.session)
-                self.session = NativeCore.shared.createSession()
-                NativeCore.shared.setDirect(self.session, self.directInput)
-                NativeCore.shared.setCodeInput(self.session, self.codeInput)
-            })
+        // ユーザー辞書: 送るのは同じプロセスの importUserDictionary だけなので、ほかのプロセスから届く分散通知では受けない
+        dictionaryObserver = NotificationCenter.default.addObserver(
+            forName: Notification.Name("MeltypeUserDictionaryChanged"), object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.recreateSession()
+        }
+        // 設定: 入力メニューの「設定を読み込む…」と、別のプロセスで動かす Meltype --import-settings の両方から届くので、分散通知で受ける
+        settingsObserver = DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("MeltypeSettingsChanged"), object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.recreateSession()
         }
     }
 
+    /// ユーザー辞書を取り込んだ・設定を読み込んだ (ほかの入力欄で): 入力の本体を作り直して、新しい辞書・設定を読む
+    private func recreateSession() {
+        commitComposition(client())
+        NativeCore.shared.destroySession(session)
+        session = NativeCore.shared.createSession()
+        NativeCore.shared.setDirect(session, directInput)
+        NativeCore.shared.setCodeInput(session, codeInput)
+    }
+
     deinit {
-        for observer in reloadObservers { DistributedNotificationCenter.default().removeObserver(observer) }
+        if let dictionaryObserver { NotificationCenter.default.removeObserver(dictionaryObserver) }
+        if let settingsObserver { DistributedNotificationCenter.default().removeObserver(settingsObserver) }
         NativeCore.shared.destroySession(session)
     }
 
@@ -283,6 +293,8 @@ final class MeltypeInputController: IMKInputController, ModeServiceTarget {
         exportSettingsItem.target = self
         let importSettingsItem = menu.addItem(withTitle: "設定を読み込む… (Windows で書き出したものも)", action: #selector(importSettings(_:)), keyEquivalent: "")
         importSettingsItem.target = self
+        let configItem = menu.addItem(withTitle: "Meltype の設定ファイル (config.json) を開く…", action: #selector(openConfigFile(_:)), keyEquivalent: "")
+        configItem.target = self
         menu.addItem(withTitle: "Meltype のデータフォルダを開く (設定・ユーザー辞書)", action: #selector(openDataFolder(_:)), keyEquivalent: "")
         menu.addItem(withTitle: "不具合の報告・提案… (Mac 版はプレビュー版です)", action: #selector(openReport(_:)), keyEquivalent: "")
         return menu
@@ -353,17 +365,21 @@ final class MeltypeInputController: IMKInputController, ModeServiceTarget {
 
     @objc private func importUserDictionary(_ sender: Any?) {
         commitComposition(client())
+        // 入力メソッドは背景のアプリなので、前面に出さないと、開いた画面がほかのウィンドウに触れた瞬間に消える (issue #716)
+        NSApp.activate(ignoringOtherApps: true)
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
+        panel.level = .floating
+        panel.makeKeyAndOrderFront(nil)
         guard panel.runModal() == .OK, let source = panel.url,
               let directory = NativeCore.shared.dataDirectory else { return }
+        NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         do {
             let count = try MacUserDictionary.importFile(source, directory: directory)
             alert.messageText = "ユーザー辞書に\(count)語を追加しました"
-            DistributedNotificationCenter.default().postNotificationName(
-                Notification.Name("MeltypeUserDictionaryChanged"), object: nil, userInfo: nil, deliverImmediately: true)
+            NotificationCenter.default.post(name: Notification.Name("MeltypeUserDictionaryChanged"), object: nil)
         } catch {
             alert.messageText = "ユーザー辞書を取り込めませんでした"
             alert.informativeText = error.localizedDescription
@@ -409,6 +425,16 @@ final class MeltypeInputController: IMKInputController, ModeServiceTarget {
         NSWorkspace.shared.open(url)
     }
 
+    /// 設定ファイル (Windows 版と共通の config.json) を、無ければ空の設定で作ってから、既定のエディターで開く (issue #508)。
+    @objc private func openConfigFile(_ sender: Any?) {
+        guard let directory = NativeCore.shared.dataDirectory else { return }
+        let url = URL(fileURLWithPath: directory, isDirectory: true).appendingPathComponent("config.json")
+        if !FileManager.default.fileExists(atPath: url.path) {
+            try? "{\n}\n".write(to: url, atomically: true, encoding: .utf8)
+        }
+        NSWorkspace.shared.open(url)
+    }
+
     @objc private func openDataFolder(_ sender: Any?) {
         guard let directory = NativeCore.shared.dataDirectory else { return }
         NSWorkspace.shared.open(URL(fileURLWithPath: directory, isDirectory: true))
@@ -421,12 +447,13 @@ final class MeltypeInputController: IMKInputController, ModeServiceTarget {
         for edit in result.commits {
             var range = NSRange(location: NSNotFound, length: 0)
             if edit.deleteBefore > 0 {
-                // 確定し直し: キャレット (変換中の文字があればその先頭) の前の文字を置き換える。
-                let marked = client.markedRange()
-                let caret = marked.location != NSNotFound && marked.length > 0 ? marked.location : client.selectedRange().location
-                if caret != NSNotFound {
-                    let length = min(edit.deleteBefore, caret)
-                    range = NSRange(location: caret - length, length: length)
+                if let verified = verifiedRange(for: edit, client: client) {
+                    // 確定し直し: キャレットの前の文字を置き換える。
+                    range = verified
+                } else {
+                    // 消す文字を確認できないときは、前の文字は消さずに今打った文字だけを入れる
+                    // (本体は text が入った前提で状態を進めるので、edit ごと捨てない)。
+                    NSLog("Meltype: 確定し直す文字を確認できないため、前の文字を消しません")
                 }
             }
             client.insertText(NSAttributedString(string: edit.text), replacementRange: range)
@@ -448,6 +475,17 @@ final class MeltypeInputController: IMKInputController, ModeServiceTarget {
         } else {
             hideComposition(client: client)
         }
+    }
+
+    /// 消してよいと確認できた範囲 (キャレット (変換中の文字があればその先頭) の前の DeleteBefore 文字)。確認できないときは nil。
+    private func verifiedRange(for edit: TextEdit, client: IMKTextInput) -> NSRange? {
+        let marked = client.markedRange()
+        let caret = marked.location != NSNotFound && marked.length > 0 ? marked.location : client.selectedRange().location
+        guard caret != NSNotFound, caret >= edit.deleteBefore else { return nil }
+        let candidate = NSRange(location: caret - edit.deleteBefore, length: edit.deleteBefore)
+        let previous = client.attributedSubstring(from: candidate)?.string
+        guard matchesExpectedText(previous, expected: edit.expect, deleteBefore: edit.deleteBefore) else { return nil }
+        return candidate
     }
 
     /// 変換中の文字を入力欄に下線付きで出す (変換中は文節ごと、選んでいる文節は太い下線)。

@@ -18,8 +18,17 @@ public sealed record UserWord(string Reading, string Word);
 /// </summary>
 public sealed class UserDictionary
 {
-    /// <summary>1 文字の読みは、ほかの語の中にも現れやすく巻き込みが大きいので登録させない。</summary>
+    /// <summary>他の辞書 (Microsoft IME・Google 日本語入力・macOS の plist) から取り込む読みの最小の長さ。</summary>
     public const int MinReadingLength = 2;
+
+    /// <summary>自分で登録する (画面・userdict.txt) 読みの最小の長さ。</summary>
+    public const int MinRegisteredReadingLength = 1;
+
+    /// <summary>
+    /// 読みの途中に見つけて使える読みの最小の長さ。1 文字の読み (お → お父さん) は、ほかの語の中にも現れやすく巻き込みが大きいので、
+    /// 変換する読みが 1 文字だけのとき (その文字だけを変換するとき) にだけ使う (issue #710)。
+    /// </summary>
+    private const int MinSplitReadingLength = 2;
 
     private readonly string? _path;
     private readonly List<UserWord> _words = [];
@@ -27,13 +36,22 @@ public sealed class UserDictionary
     private readonly List<UserWord> _imported = [];
     // 同梱の語句 (dictionaries/phrases.txt)。変換エンジンが苦手な語句を補う。ユーザーの登録より後回しで、保存も表示もしない。
     private readonly List<UserWord> _builtIn = [];
+    // 同梱の語句のうち、読みの頭に ^ を付けたもの (^けんりつ)。変換エンジンの文節の頭から始まるときだけ使う。
+    private readonly HashSet<string> _headOnly = new(StringComparer.Ordinal);
+    // 同梱の語句のうち、| で文節の区切りを書いたもの (いち|がっき → 一|学期)。読みと語句は | を除いた形で _builtIn に入れる。
+    private readonly Dictionary<string, (string Reading, string Word)[]> _clauses = new(StringComparer.Ordinal);
     private Dictionary<string, List<string>> _byReading = new(StringComparer.Ordinal);
     private int _maxReadingLength;
 
     public UserDictionary(string? path, bool builtIn = true, string? importDirectory = null)
     {
         _path = path;
-        if (builtIn) Parse(Detection.DictionarySource.ReadEmbedded("phrases.txt").Split('\n'), _builtIn);
+        if (builtIn)
+        {
+            Parse(Detection.DictionarySource.ReadEmbedded("phrases.txt").Split('\n'), _builtIn);
+            MarkHeadOnly();
+            SplitBuiltInClauses();
+        }
         try
         {
             if (path is not null && File.Exists(path)) Parse(File.ReadAllLines(path, Encoding.UTF8), _words);
@@ -85,12 +103,57 @@ public sealed class UserDictionary
         {
             if (line.StartsWith('#')) continue;
             var parts = line.TrimEnd('\r').Split('\t');
-            if (parts.Length >= 2 && parts[0].Trim().Length >= MinReadingLength && parts[1].Trim().Length > 0)
+            // 制御文字 (ESC など) の入った語は、確定するとアプリにキー操作として届くので読まない
+            if (parts.Length >= 2 && parts[0].Trim().Length >= MinRegisteredReadingLength && parts[1].Trim().Length > 0 && !parts[0].Any(char.IsControl) && !parts[1].Any(char.IsControl))
             {
                 words.Add(new UserWord(parts[0].Trim(), parts[1].Trim()));
             }
         }
     }
+
+    /// <summary>
+    /// 同梱の語句の | (文節の区切り) を読む。いち|がっき → 一|学期 は、読み いちがっき を 一学期 として見つけ、変換では 一|学期 の 2 つの文節にする
+    /// (数字と 学期 を別に選び直せるように)。読みと語句の | の数が違う行は、同梱の辞書の誤りなので例外にする
+    /// (tools/check-dictionaries.mjs と BuiltInPhrases_AreSplitOut で見つける)。
+    /// </summary>
+    private void SplitBuiltInClauses()
+    {
+        for (var i = 0; i < _builtIn.Count; i++)
+        {
+            var (reading, word) = (_builtIn[i].Reading, _builtIn[i].Word);
+            if (!reading.Contains('|') && !word.Contains('|')) continue;
+            var readings = reading.Split('|');
+            var words = word.Split('|');
+            if (readings.Length != words.Length || readings.Any(r => r.Length == 0) || words.Any(w => w.Length == 0))
+                throw new InvalidDataException($"phrases.txt: 読み「{reading}」と語句「{word}」の | の区切りが合いません");
+            _builtIn[i] = new UserWord(reading.Replace("|", ""), word.Replace("|", ""));
+            _clauses[_builtIn[i].Reading + "\t" + _builtIn[i].Word] = [.. readings.Zip(words)];
+        }
+    }
+
+    /// <summary>
+    /// 見つけた語を文節に分ける。同梱の語句に | で区切りを書いたもの (いちがっき → 一学期 は いち|がっき → 一|学期) は分けた文節、
+    /// それ以外はそのまま 1 つの文節。
+    /// </summary>
+    public IReadOnlyList<(string Reading, string Word)> Clauses(string reading, string word) =>
+        _clauses.TryGetValue(reading + "\t" + word, out var parts) ? parts : [(reading, word)];
+
+    /// <summary>
+    /// 同梱の語句の読みの頭の ^ を読む。^けんりつ は、変換エンジンの文節の頭から始まるときだけ使い、
+    /// 長い語の途中 (はっけんりつ = 発見率 の けんりつ) では使わない (AlignUserWords)。
+    /// </summary>
+    private void MarkHeadOnly()
+    {
+        for (var i = 0; i < _builtIn.Count; i++)
+        {
+            if (!_builtIn[i].Reading.StartsWith('^')) continue;
+            _builtIn[i] = _builtIn[i] with { Reading = _builtIn[i].Reading[1..] };
+            _headOnly.Add(_builtIn[i].Reading.Replace("|", ""));
+        }
+    }
+
+    /// <summary>変換エンジンの文節の頭から始まるときだけ使う同梱の語句の読みか (^けんりつ)。</summary>
+    public bool IsHeadOnly(string reading) => _headOnly.Contains(reading);
 
     /// <summary>登録内容が変わるたびに増える (変換結果のキャッシュを捨てるため)。</summary>
     public int Version { get; private set; }
@@ -104,9 +167,10 @@ public sealed class UserDictionary
     {
         reading = reading.Trim();
         word = word.Trim();
-        if (reading.Length < MinReadingLength) return $"読みは {MinReadingLength} 文字以上にしてください。";
+        if (reading.Length < MinRegisteredReadingLength) return "読みを入力してください。";
         if (word.Length == 0) return "単語を入力してください。";
-        if (reading.Contains('\t') || word.Contains('\t')) return "タブ文字は使えません。";
+        // CR・ESC などは確定するとアプリにキー操作として届く
+        if (reading.Any(char.IsControl) || word.Any(char.IsControl)) return "タブ・改行などの制御文字は使えません。";
         if (_words.Any(w => w.Reading == reading && w.Word == word)) return null;
         _words.Add(new UserWord(reading, word));
         Changed();
@@ -119,7 +183,7 @@ public sealed class UserDictionary
         var added = 0;
         foreach (var word in words)
         {
-            if (word.Reading.Length < MinReadingLength || word.Word.Length == 0 || word.Reading.Contains('\t') || word.Word.Contains('\t')) continue;
+            if (word.Reading.Length < MinRegisteredReadingLength || word.Word.Length == 0 || word.Reading.Any(char.IsControl) || word.Word.Any(char.IsControl)) continue;
             if (_words.Any(w => w.Reading == word.Reading && w.Word == word.Word)) continue;
             _words.Add(word);
             added++;
@@ -143,7 +207,7 @@ public sealed class UserDictionary
     /// </summary>
     public List<(string Reading, string? Word)>? Split(string kana)
     {
-        if (_byReading.Count == 0 || kana.Length < MinReadingLength) return null;
+        if (_byReading.Count == 0 || kana.Length < MinRegisteredReadingLength) return null;
         var pieces = new List<(string Reading, string? Word)>();
         var plain = new StringBuilder();
         var found = false;
@@ -151,7 +215,7 @@ public sealed class UserDictionary
         while (i < kana.Length)
         {
             string? matched = null;
-            for (var length = Math.Min(_maxReadingLength, kana.Length - i); length >= MinReadingLength; length--)
+            for (var length = Math.Min(_maxReadingLength, kana.Length - i); length >= (kana.Length == 1 ? MinRegisteredReadingLength : MinSplitReadingLength); length--)
             {
                 if (_byReading.ContainsKey(kana.Substring(i, length)))
                 {
@@ -210,12 +274,9 @@ public sealed class UserDictionary
         if (_path is null) return;
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
             var lines = new List<string> { "# Meltype ユーザー辞書: 1 行に「読み<Tab>単語」" };
             lines.AddRange(_words.Select(w => $"{w.Reading}\t{w.Word}"));
-            var temp = _path + ".tmp";
-            File.WriteAllLines(temp, lines, new UTF8Encoding(true));
-            File.Move(temp, _path, overwrite: true);
+            Config.DataFile.Write(_path, temp => File.WriteAllLines(temp, lines, new UTF8Encoding(true)));
         }
         catch (Exception ex)
         {

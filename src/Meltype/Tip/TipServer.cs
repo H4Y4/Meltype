@@ -74,13 +74,17 @@ internal sealed class TipServer : IDisposable
         System.Runtime.InteropServices.RuntimeInformation.OSArchitecture != System.Runtime.InteropServices.Architecture.Arm64 &&
         IsRegistered && IsInUserLanguageList;
 
-    // 登録されているか。レジストリを読めなければ null
+    // 登録されているか。レジストリを読めなければ null。
+    // TIP のキーだけ残り、DLL の登録 (InprocServer32) や DLL が無いことがある (セキュリティソフトが登録を途中で止めたとき)。
+    // そのときは登録されていないとみなす (動作モードを Meltype キーボードに戻す)
     private static bool? Registration()
     {
         try
         {
             using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\CTF\TIP\{417D801B-A9BD-4C26-BD16-356A825A6998}");
-            return key is not null;
+            if (key is null) return false;
+            using var server = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Classes\CLSID\{417D801B-A9BD-4C26-BD16-356A825A6998}\InprocServer32");
+            return server?.GetValue(null) is string dll && File.Exists(dll);
         }
         catch
         {
@@ -384,6 +388,29 @@ internal sealed class TipServer : IDisposable
         }
     }
 
+    /// <summary>
+    /// 応答に時間がかかった要求をログに残す。DLL はキーの応答を 800ms まで待ち、来なければ打った文字のまま入れるので、
+    /// その原因を調べられるように (UI スレッドが空くのを待った時間も含む)。打った文字は書かない。
+    /// 遅いことが続いてもほかのログを押し出さないように、書くのは 20 回まで。
+    /// </summary>
+    private void LogSlow(string request, long elapsedMs)
+    {
+        if (elapsedMs < SlowRequestMs || Interlocked.Increment(ref _slowRequests) > 20) return;
+        string? op = null;
+        try
+        {
+            using var document = JsonDocument.Parse(request);
+            if (document.RootElement.TryGetProperty("op", out var value)) op = value.GetString();
+        }
+        catch (JsonException) { }
+        // op はアプリの側が送ってくるので、知っているものだけを書く (ログを崩さないように)
+        var shown = op is "hello" or "key" or "commit" or "select" or "close" or "toggle" or "mode" ? op : "?";
+        Log.Warn($"Meltype IME: 要求 ({shown}) の応答に {elapsedMs}ms かかりました。");
+    }
+
+    private const int SlowRequestMs = 500;
+    private int _slowRequests;
+
     private async Task Serve(NamedPipeServerStream pipe)
     {
         // このつながりの入力の本体 (UI スレッドからだけ触る。Meltype.exe 自身の UI スレッドのつながりは、UI スレッドが止まっている間に触る)
@@ -409,7 +436,9 @@ internal sealed class TipServer : IDisposable
                 try
                 {
                     var request = Encoding.UTF8.GetString(message.GetBuffer(), 0, (int)message.Length);
+                    var started = Environment.TickCount64;
                     reply = FromOwnUiThread(ownClient, request) ? Handle(request, sessions) : Invoke(() => Handle(request, sessions));
+                    LogSlow(request, Environment.TickCount64 - started);
                 }
                 catch (Exception ex)
                 {
@@ -474,7 +503,7 @@ internal sealed class TipServer : IDisposable
     private const int MaxGreeted = 256;
 
     /// <summary>要求を処理して応答を返す。処理した後に、このつながりで入力中かを公開する (ComposingSignal)。UI スレッドで呼ぶ。</summary>
-    private string Handle(string request, Dictionary<string, MeltypeSession> sessions)
+    internal string Handle(string request, Dictionary<string, MeltypeSession> sessions)
     {
         var reply = HandleRequest(request, sessions);
         Composition.ComposingSignal.Update(sessions, sessions.Values.Any(session => session.IsComposing));
@@ -511,16 +540,17 @@ internal sealed class TipServer : IDisposable
                 // 名前はアプリの側が送ってくるので、ログを崩さないように短くして、改行などは消す
                 var shown = new string(process.Where(c => !char.IsControl(c) && !char.IsSurrogate(c) && char.GetUnicodeCategory(c) != System.Globalization.UnicodeCategory.Format).Take(64).ToArray());
                 if (greeting && _greeted.Count < MaxGreeted && _greeted.Add(shown)) Log.Info($"Meltype IME: {shown} からつながりました。");
-                if (!greeting) return Inactive;
                 // Meltype を更新する前から動いているアプリは、古い DLL を読み込んだまま (アプリを開き直すまで新しい DLL にならない)
-                if (Int(root, "protocol") < TipProtocol && _outdated.Count < MaxGreeted && _outdated.Add(shown))
+                if (greeting && Int(root, "protocol") < TipProtocol && _outdated.Count < MaxGreeted && _outdated.Add(shown))
                 {
                     Log.Warn($"Meltype IME: {shown} は古い Meltype IME を読み込んだままです。アプリを開き直すと、入力中の Ctrl キー (Mac 式) などが効くようになります。");
                     OutdatedClient?.Invoke(shown);
                 }
+                var shortcutJson = "[" + string.Join(",", _settings().EffectiveToggleShortcuts
+                    .Select(b => $"{{\"key\":{b.Key},\"mods\":{(int)b.Modifiers}}}")) + "]";
                 // コードエディター・ターミナルのアプリか (DLL は、キャレットが動くたびに入力モードの表示を問い合わせる)
                 var codeApp = _settings().ProfileFor(process + ".exe") == AppProfile.Code;
-                return $"{{\"active\":true,\"code\":{(codeApp ? "true" : "false")},\"directDetection\":{(DirectDetectionFor(process) ? "true" : "false")},\"macControlKeys\":{(MacControlKeys ? "true" : "false")},\"controlKeys\":{ControlKeysJson},\"consumed\":false,\"commits\":[],\"view\":null}}";
+                return $"{{\"active\":{(greeting ? "true" : "false")},\"toggleShortcuts\":{shortcutJson},\"code\":{(codeApp ? "true" : "false")},\"directDetection\":{(DirectDetectionFor(process) ? "true" : "false")},{FullWidthSpaceJson()}{ControlKeysJson()}\"consumed\":false,\"commits\":[],\"view\":null}}";
             }
             case "close":
                 if (sessions.Remove(sid, out var closing) && closing.IsComposing) closing.CommitPending();
@@ -610,14 +640,21 @@ internal sealed class TipServer : IDisposable
         return settings.DirectModeAutoDetect && settings.ForApp(processName).DetectionLevel != DetectionLevel.Manual;
     }
 
-    /// <summary>入力中の Ctrl+キーが Mac 式か。DLL は、変換中に確定せずに Meltype.exe へ送る Ctrl+キーをこれで選ぶ (Ctrl+J/K/L/N/F/B …)。</summary>
-    private bool MacControlKeys => _settings().ControlKeys == ControlKeyStyle.Mac;
+    /// <summary>入力中の Ctrl+キーが Mac 式か (設定「入力中の Ctrl キー」か「Control キーを macOS 標準の日本語入力と同じにする」)。</summary>
+    private bool MacControlKeys => _settings().ControlKeys == ControlKeyStyle.Mac || _settings().MacControlKeys;
 
     /// <summary>
-    /// 変換中に確定せずに Meltype.exe へ送る Ctrl+キーの一覧 (JSON の文字列。英字は大文字、記号はその文字)。DLL は受け取った一覧に従う
-    /// (DLL に決め打ちすると、割り当てを変えてもアプリを開き直すまで効かない)。
+    /// DLL が変換中に確定せずに Meltype.exe へ送る Ctrl+キー。macControlKeys は Mac 式か、controlKeys はその一覧 (JSON の文字列。英字は大文字、記号はその文字)。
+    /// DLL は受け取った一覧に従う (DLL に決め打ちすると、割り当てを変えてもアプリを開き直すまで効かない)。
     /// </summary>
-    private string ControlKeysJson => JsonSerializer.Serialize(CompositionController.ControlShortcutKeys(_settings().ControlKeys));
+    private string ControlKeysJson() =>
+        $"\"macControlKeys\":{(MacControlKeys ? "true" : "false")},\"controlKeys\":{JsonSerializer.Serialize(CompositionController.ControlShortcutKeys(MacControlKeys ? ControlKeyStyle.Mac : ControlKeyStyle.Atok))},";
+
+    /// <summary>
+    /// 設定「スペースを全角で入力」(issue #259)。DLL は、これが ON で日本語入力のときに、何も打っていなくても Space を受け取って
+    /// Meltype.exe に送る (OFF なら Space はそのままアプリに通す。Shift+Space はいつも送る: issue #246, #881)
+    /// </summary>
+    private string FullWidthSpaceJson() => $"\"fullWidthSpace\":{(_settings().FullWidthSpaceByDefault ? "true" : "false")},";
 
     private string Reply(bool active, SessionResult result, bool code, bool english, bool? directDetection,
         bool switchedToJapanese = false, bool? directEnglishWord = null)
@@ -625,7 +662,7 @@ internal sealed class TipServer : IDisposable
         var json = result.ToJson();
         var detection = directDetection is { } enabled ? $"\"directDetection\":{(enabled ? "true" : "false")}," : "";
         var englishWord = directEnglishWord is { } isEnglishWord ? $"\"directEnglishWord\":{(isEnglishWord ? "true" : "false")}," : "";
-        return $"{{\"active\":{(active ? "true" : "false")},\"code\":{(code ? "true" : "false")},\"english\":{(english ? "true" : "false")},{detection}{englishWord}\"macControlKeys\":{(MacControlKeys ? "true" : "false")},\"controlKeys\":{ControlKeysJson},\"switchToJapanese\":{(switchedToJapanese ? "true" : "false")},{json[1..]}";
+        return $"{{\"active\":{(active ? "true" : "false")},\"code\":{(code ? "true" : "false")},\"english\":{(english ? "true" : "false")},{detection}{englishWord}{FullWidthSpaceJson()}{ControlKeysJson()}\"switchToJapanese\":{(switchedToJapanese ? "true" : "false")},{json[1..]}";
     }
 
     /// <summary>

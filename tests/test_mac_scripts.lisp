@@ -195,6 +195,7 @@
   (fake-tool work "swift" "echo selected >> \"$MELTYPE_TEST_LOG\"")
   (dolist (name '("pkill" "killall" "xattr" "lsregister" "launchctl"))
     (fake-tool work name "exit 0"))
+  (fake-tool work "killall" "echo UNEXPECTED_MENU_REFRESH >> \"$MELTYPE_TEST_LOG\"")
   (fake-tool work "open" "echo UNEXPECTED_OPEN >> \"$MELTYPE_TEST_LOG\"; exit 1")
   (run-script work "install.sh" nil)
   (assert (equal '("app:--register-input-source" "started" "selected")

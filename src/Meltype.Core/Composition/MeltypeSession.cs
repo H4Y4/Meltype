@@ -10,7 +10,10 @@ namespace Meltype.Composition;
 
 /// <summary>
 /// 入力欄への書き込み 1 回分。DeleteBefore 文字をキャレットの前から消してから Text を入れる (確定し直すとき以外は 0)。
-/// Expect は消す文字 (このセッションで確定した文字。分からなければ null)。入力欄の文字がこれと違えば、消さないほうが安全。
+/// Expect は消す文字 (このセッションで確定した文字。分からなければ null)。
+/// フロントは、キャレットの前が Expect と一致すると確認できたときだけ消す。確認できないときは消さずに Text だけを入れる
+/// (本体は Text が入った前提で状態を進めるので、Edit ごと捨てると、打った文字が消えて入力欄と本体がずれる)。
+/// DeleteBefore は本体の単位 (UTF-16) の長さなので、消す文字数は Expect から入力欄の単位で数える。
 /// </summary>
 public readonly record struct TextEdit(int DeleteBefore, string Text, string? Expect = null);
 
@@ -45,6 +48,10 @@ public sealed record SessionResult(bool Consumed, IReadOnlyList<TextEdit> Commit
         }
         builder.Append("{\"text\":");
         AppendString(builder, view.Text);
+        // この表示を確定したときに入る文字列 (IBus がフォーカスを外したときに確定するのは表示中の文字)。
+        builder.Append(",\"committed\":");
+        if (view.Committed is { } committed) AppendString(builder, committed);
+        else builder.Append("null");
         builder.Append(",\"converting\":").Append(view.Converting ? "true" : "false");
         builder.Append(",\"selectedIndex\":").Append(view.SelectedIndex);
         builder.Append(",\"selectedClause\":").Append(view.SelectedClause);
@@ -177,6 +184,8 @@ public sealed class MeltypeSession
 
     // config.json (入力欄で共有し、書き換えられたら読み直す)。
     private static SettingsFile? s_settingsFile;
+    // #123 の候補で調べた GitHub のタイトル (設定「#番号で GitHub の Issue・PR のタイトルを候補に出す」)。セッションの間だけ覚える
+    private static readonly GitHubIssueTitles s_githubTitles = new();
 
     /// <summary>dataDirectory に置いた設定・辞書・学習データで作る (テストでは一時フォルダーを渡す)。</summary>
     internal static MeltypeSession CreateDefault(string dataDirectory, IKanjiConverter converter, Func<string, IReadOnlyList<string>>? moreCandidates, IWordChecker? wordChecker, bool autoSpacing = false, bool shiftArrowPaging = false)
@@ -241,6 +250,35 @@ public sealed class MeltypeSession
             SpaceCommitsSymbols = () => Current().SpaceCommitsSymbols,
             YenKey = () => Current().YenKey,
             SpaceAroundEnglish = () => Current().SpaceAroundEnglish,
+            EnglishFirstInput = () => Current().EnglishFirstInput,
+            ConsonantAbbreviations = () => Current().ConsonantAbbreviations,
+            ZSymbols = () => Current().ZSymbols,
+            SpaceAroundNumbers = () => Current().SpaceAroundNumbers,
+            NumberKeysSelectCandidates = () => Current().NumberKeysSelectCandidates,
+            ShiftSpaceHalfWidth = () => Current().ShiftSpaceHalfWidth,
+            EnterCommitsAsShown = () => Current().EnterCommitsAsShown,
+            AlphanumericKeyStartsAsTyped = () => Current().AlphanumericKeyStartsAsTyped,
+            FullWidthParentheses = () => Current().FullWidthParentheses,
+            FullWidthSlash = () => Current().FullWidthSlash,
+            SquareBrackets = () => Current().SquareBrackets,
+            EscStepsBack = () => Current().EscStepsBack,
+            EscRevertsSelectedClause = () => Current().EscRevertsSelectedClause,
+            FunctionKeysAffectSelectedClause = () => Current().FunctionKeysAffectSelectedClause,
+            CompatibleShortcuts = () => Current().CompatibleShortcuts,
+            PartialCommit = () => Current().PartialCommit,
+            MacControlKeys = () => Current().MacControlKeys,
+            CursorIntoBrackets = () => Current().CursorIntoBrackets,
+            ControlKeyBindings = () => Current().ControlKeyBindings,
+            CalculatorCandidates = () => Current().CalculatorCandidates,
+            LogKeyIntervals = () => Current().LogKeyIntervals,
+            LaughterAfterKana = () => Current().LaughterAfterKana,
+            ContextualLearning = () => Current().ContextualLearning,
+            FullWidthSpaceByDefault = () => Current().FullWidthSpaceByDefault,
+            ShowCandidatesWhileTyping = () => Current().ShowCandidatesWhileTyping,
+            GitHubIssueCandidates = () => Current().GitHubIssueCandidates,
+            GitHubRepository = () => Current().GitHubRepository,
+            GitHubTitles = () => s_githubTitles,
+            ClipboardCandidates = () => Current().ClipboardCandidates,
             AutomaticEnglishSpacing = () => autoSpacing,
             ShiftArrowPaging = shiftArrowPaging,
             Punctuation = () => Current().Punctuation,
@@ -411,7 +449,13 @@ public sealed class MeltypeSession
             return Track(_host.Result(consumed: false), vk, ch, modifier);
         }
         // 先頭か空白の直後の /command・$skill・@ファイル名 は、変換せずにそのままアプリへ渡す (#193)。
-        if (!modifier && !_controller.IsComposing && ch is { } c && _settings().SigilWordsDirect && _sigil.PassesThrough(c, before))
+        // 文章の入力欄の / は、変換ボックスに ・ として入れる。Space で / にすると、続く名前はそのまま渡す。
+        if (!modifier && !_controller.IsComposing && ch is '/' && !PassesSlash(before) && !_sigil.IsActive && _settings().SigilWordsDirect &&
+            _sigil.PassesThrough('/', before))
+        {
+            _controller.MarkSlashAtStart();
+        }
+        else if (!modifier && !_controller.IsComposing && ch is { } c && _settings().SigilWordsDirect && _sigil.PassesThrough(c, before))
         {
             if (CodeInput) TrackCodeKey(vk, ch, modifier);
             return Track(_host.Result(consumed: false), vk, ch, modifier);
@@ -426,7 +470,7 @@ public sealed class MeltypeSession
         if (shift && _controller.IsComposing) Feed(new KeyEvent(VirtualKeys.LShift, 0, false, false, false, down.TimeMs));
         if (modifier && _controller.IsComposing) Feed(new KeyEvent(control ? VirtualKeys.LControl : VirtualKeys.LMenu, 0, false, false, false, down.TimeMs));
 
-        var swallowed = Feed(down, e => !modifier && (StartsComposition(e, ch, shift) || e.Vk == VirtualKeys.Space && shift));
+        var swallowed = Feed(down, e => !modifier && (StartsComposition(e, ch, shift) || e.Vk == VirtualKeys.Space && (shift || !_direct && _settings().FullWidthSpaceByDefault)));
         // このキーをアプリに送り直した (= 使わなかった) なら、アプリに渡す。
         var consumed = swallowed && !_host.ReplayedCurrent;
         Feed(down with { IsUp = true });
@@ -458,6 +502,14 @@ public sealed class MeltypeSession
         if (!_settings().SeparateKeyRoles || !_controller.IsComposing || Direct) return null;
         return HandleKey(vk, null, false, false, false, false);
     }
+
+    /// <summary>
+    /// 打ち始めの / を、・ にせずそのままアプリへ渡すか。コードの入力欄で、キャレットがコードの中か、
+    /// ターミナルの AI の入力行 (Claude Code・Codex の /command を打つ所) にあるとき (行が分からなければコードとみなす)。
+    /// コメント・文字列の中は ・ にする (Meltype キーボードと同じ)。
+    /// </summary>
+    private bool PassesSlash(string? before) =>
+        CodeInput && !_codeJapanese && (before is null || LineContext.ClassifyText(before) is LineKind.Code or LineKind.Prompt);
 
     private void TrackCodeKey(int vk, char? ch, bool modifier)
     {

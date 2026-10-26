@@ -33,6 +33,12 @@ internal static class SelfTest
 
         ApplicationConfiguration.Initialize();
         Check("バージョン", () => AppInfo.Version);
+        Check("ポータブル版のデータ保存先", () =>
+        {
+            if (!Config.AppPaths.IsPortable) return "portable marker が無い通常版";
+            Directory.CreateDirectory(Config.AppPaths.DataDirectory);
+            return Config.AppPaths.DataDirectory;
+        });
         Check("設定", () => new Config.Settings().Clone().Normalize().Mode.ToString());
         Check("設定の保存と読み込み", () =>
         {
@@ -47,7 +53,7 @@ internal static class SelfTest
                 File.Delete(path);
             }
         });
-        Check("判定 (IME 自動切替)", () => ScoreEngine.CreateDefault(null, () => new Config.Settings())
+        Check("判定 (英数状態の検知)", () => ScoreEngine.CreateDefault(() => new Config.Settings())
             .Evaluate(new DetectionInput("konn", [], false)).Verdict.ToString());
         var detector = CompositionDetector.CreateDefault();
         Check("変換ボックスの英語判定", () =>
@@ -74,7 +80,7 @@ internal static class SelfTest
         Check("UI Automation", () => { var result = ""; var thread = new Thread(() => result = FocusInspector.Probe()); thread.SetApartmentState(ApartmentState.MTA); thread.Start(); thread.Join(); return result; });
         Check("画面", () =>
         {
-            using var engine = new MeltypeEngine(new Config.Settings(), null, null, null);
+            using var engine = new MeltypeEngine(new Config.Settings(), null, null);
             using var invoker = new Control();
             invoker.CreateControl();
             using var service = new CompositionService(invoker, detector, new CompositionOptions { UserDictionary = new UserDictionary(null), History = new ConversionHistory(null) });
@@ -96,7 +102,7 @@ internal static class SelfTest
         {
             // トレイのアイコン・メニュー・ホットキーを作ってすぐ閉じる (キーボードフックは掛けない)。
             // TsfIntroduced にしておく (作る人の PC に Meltype IME があると、入力方式が Meltype IME に切り替わってしまう)。
-            using var engine = new MeltypeEngine(new Config.Settings { TsfIntroduced = true }, null, null, null);
+            using var engine = new MeltypeEngine(new Config.Settings { TsfIntroduced = true }, null, null);
             var tray = new UI.TrayApplicationContext(engine);
             tray.ExitThread();
             return "OK";
@@ -106,9 +112,6 @@ internal static class SelfTest
             var directory = Path.Combine(Path.GetTempPath(), $"meltype-selftest-{Guid.NewGuid():N}");
             try
             {
-                var model = new Learning.UserModel(Path.Combine(directory, "model.json"));
-                model.Learn("konn", Learning.SessionOutcome.JapaneseAccepted, false);
-                model.Save();
                 new ConversionHistory(Path.Combine(directory, "conversions.json")).Remember("はしを", "箸を");
                 Diagnostics.Log.SetFileOutput(Path.Combine(directory, "meltype.log"));
                 Diagnostics.Log.Info("自己診断");
@@ -136,11 +139,50 @@ internal static class SelfTest
             return copied ? "コピーできる" : "コピーできない";
         });
 
+        // Zenzai (llama-server と HttpClient で話す) と GitHub の Issue の題名の候補 (HTTPS) が使う部品。どちらも既定は OFF で、ほかの機能では読み込まれない。
+        // 配布用にランタイムを削るとき、ここで読み込まないと「読み込まれなかった大きなアセンブリ」として消え、
+        // ON にしたとたん、打つたびに例外になって日本語を打てなくなった (#973)。
+        Check("Zenzai (llama-server と HTTP)", () =>
+        {
+            // 本物と同じ ZenzaiConverter で、loopback の偽の llama-server に 1 回変換を頼む (POST・JSON の道を通す。外へはつながない)
+            using var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+            listener.Start();
+            var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+            var server = Task.Run(() => AnswerOnce(listener, """{"content":"今日は"}"""));
+            using var zenzai = new ZenzaiConverter(new Uri($"http://127.0.0.1:{port}/"), timeoutMs: 10000);
+            var text = zenzai.Convert("きょうは");
+            // 偽のサーバーの側で例外になったときは、その例外を出す (Wait が投げる)
+            server.Wait(TimeSpan.FromSeconds(10));
+            return text ?? throw new InvalidOperationException("偽の llama-server から答えを受け取れない");
+        });
+        Check("GitHub の題名 (HTTPS)", () =>
+            // TLS (SslStream) と証明書の確かめ (X509Chain) の型に触って読み込むだけ。外へはつながないので、TLS の接続そのものは確かめていない
+            $"{typeof(System.Net.Security.SslStream).Name}, {typeof(System.Security.Cryptography.X509Certificates.X509Chain).Name}");
+
         report.AppendLine(failed == 0 ? "すべて OK" : $"{failed} 件失敗");
         // 配布用パッケージの作成で、使わない部品を削るのに使う (Build-Package.ps1)。
         report.AppendLine("LOADED: " + string.Join(" ", AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetName().Name).Order()));
         if (reportPath is not null) File.WriteAllText(reportPath, report.ToString(), new UTF8Encoding(true));
         else MessageBox.Show(report.ToString(), "Meltype 自己診断", MessageBoxButtons.OK, failed == 0 ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
         return failed == 0 ? 0 : 1;
+    }
+
+    /// <summary>HTTP の要求を 1 つ受け取り (見出しと Content-Length の本文を読み切る)、JSON の本文で答える。</summary>
+    private static void AnswerOnce(System.Net.Sockets.TcpListener listener, string json)
+    {
+        using var client = listener.AcceptTcpClient();
+        using var stream = client.GetStream();
+        var received = new List<byte>();
+        var buffer = new byte[4096];
+        int read;
+        int headerEnd;
+        while ((headerEnd = Encoding.ASCII.GetString([.. received]).IndexOf("\r\n\r\n", StringComparison.Ordinal)) < 0 && (read = stream.Read(buffer)) > 0) received.AddRange(buffer[..read]);
+        if (headerEnd < 0) return;
+        var header = Encoding.ASCII.GetString([.. received], 0, headerEnd);
+        var length = header.Split("\r\n").Select(l => l.Split(':', 2)).FirstOrDefault(p => p.Length == 2 && p[0].Trim().Equals("Content-Length", StringComparison.OrdinalIgnoreCase)) is { } p ? int.Parse(p[1].Trim()) : 0;
+        while (received.Count < headerEnd + 4 + length && (read = stream.Read(buffer)) > 0) received.AddRange(buffer[..read]);
+        var body = Encoding.UTF8.GetBytes(json);
+        stream.Write(Encoding.ASCII.GetBytes($"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {body.Length}\r\nConnection: close\r\n\r\n"));
+        stream.Write(body);
     }
 }
