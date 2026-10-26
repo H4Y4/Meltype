@@ -512,7 +512,9 @@ public sealed partial class CompositionDetector
                 var english = kanaInput
                     ? IsEnglishSpanKana(Raw(units, i, j), Kana(units, i, j), atEnd: j == n, BeforeScore(i), after, level, final, Kana(units, j, Math.Min(n, j + 2)))
                     : IsEnglishSpan(Raw(units, i, j) + (j == n ? pending : ""), atEnd: j == n, BeforeScore(i), after, startOfInput: i == 0, level, final, endsWord: symbolsAfter,
-                        unreadable: HasUnreadable(units, i, j) || EndsWithLoneSokuon(units, j), next: j < n ? units[j].Raw + (j + 1 == n ? pending : "") : null,
+                        unreadable: HasUnreadable(units, i, j) || EndsWithLoneSokuon(units, j) ||
+                            j == n && EndsWithEnglishConsonant(Raw(units, i, j), pending, final, i > japaneseStart ? Raw(units, japaneseStart, i) : null),
+                        next: j < n ? units[j].Raw + (j + 1 == n ? pending : "") : null,
                         previous: i > japaneseStart ? Raw(units, japaneseStart, i) : null, rest: j < n ? Raw(units, j, n) + pending : null);
                 if (english)
                 {
@@ -941,8 +943,9 @@ public sealed partial class CompositionDetector
         // 英単語で、ローマ字として読めない英字を含む (zoom + でかいぎ → m が読めない)。日本語の文の途中でも英語。
         // 日本語の後ろで、助詞 + 読めない英字 (の + ts: jissainotsyu) は、英単語 (not) ではなく 助詞 + 英字。
         // 助詞の後ろがローマ字の打ちかけ (ts = つ) のときだけ。ローマ字にならない (he + lp: help) なら英単語。
+        // 打ち終わった (final) 末尾の子音 (wo + ah の h) は、もう打ちかけではないので数えない (すぺあまん + woah が を + ah になっていた)。
         if (unreadable && before < 0 && Detection.DictionaryDetector.StartsWithParticle(lower) is { } particle && lower.Length - particle.Length <= 2 &&
-            _romaji.AnalyzeFragment(lower[particle.Length..]).IsValid) return false;
+            _romaji.AnalyzeFragment(lower[particle.Length..]) is { IsValid: true } afterParticle && !(atEnd && final && afterParticle.Partial is { Length: > 0 } and not "n")) return false;
         // 同梱の辞書の英単語で、ローマ字としては促音 (っ) を使わないと読めない語 (issue = いっすえ, apple) は英語。
         // 日本語の語 (の先頭) なら除く。
         if (inDictionary && lower.Length >= 4 && analysis is { IsValid: true, Sokuon: > 0 } && !_japanese.IsPrefix(lower)) return true;
@@ -1462,6 +1465,22 @@ public sealed partial class CompositionDetector
     /// </summary>
     private static bool EndsWithLoneSokuon(IReadOnlyList<CompositionUnit> units, int end) =>
         end >= 2 && end < units.Count && units[end - 1] is { Kana: "っ", Raw.Length: 1 } && units[end - 2].Kana == "ん";
+
+    /// <summary>
+    /// 打ち終わった (Enter・Space) 入力の末尾に、かなにならない子音 (hub の b) が残っているか。日本語は母音か ん で終わるので、
+    /// 打ち終わった時点で残っている子音は、文の途中の読めない英字 (hub|desu の b) と同じく英語の根拠になる
+    /// (kyouha|hub・githubno|hub が きょうはふb・githubのふb のまま確定されていた)。打っている途中は、続き (ふべん・ふぶき) があるので数えない。
+    /// </summary>
+    private static bool EndsWithTrailingConsonant(string pending, bool final) =>
+        final && pending.Length > 0 && pending.All(char.IsAsciiLetter) && !pending.Equals("n", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 打ち終わった入力の末尾の子音 (EndsWithTrailingConsonant) を、区間 stem + 子音を英語とする根拠にしてよいか。
+    /// 子音の前までが、前の日本語 (previous) とつなげて自然な日本語になる (shima + su + b = します + b、kai + sha + m = かいしゃ + m) なら、
+    /// 日本語の語尾に付いた打ち間違い: 英単語 (sub・sham) の根拠にしない (よろしくおねがいしまsub になっていた)。
+    /// </summary>
+    private bool EndsWithEnglishConsonant(string stem, string pending, bool final, string? previous) =>
+        EndsWithTrailingConsonant(pending, final) && !(stem.Length > 0 && JoinsJapanese(previous, stem.ToLowerInvariant(), null));
 
     private bool HasUnreadable(IReadOnlyList<CompositionUnit> units, int start, int end)
     {

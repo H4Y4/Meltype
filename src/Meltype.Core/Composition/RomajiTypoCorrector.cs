@@ -240,8 +240,10 @@ public sealed class RomajiTypoCorrector
     /// </summary>
     public bool ReadsAsJapanese(string before, string word, string after)
     {
-        if (Kana(before, partial: false) is not { } head || Kana(word, partial: false) is not { } middle || Kana(after, partial: true) is not { } tail) return false;
-        var joined = Segment(head + middle + tail, -1).Cost;
+        // つなげた方は、前と語を続けてかなにする (tanoshikat + ta の t は、続けて読むと っ になる)。区切った方の前は、打ちかけの子音を捨てる
+        if (Kana(word, partial: false) is null || Kana(before + word, partial: false) is not { } joinedHead ||
+            Kana(before, partial: true) is not { } head || Kana(after, partial: true) is not { } tail) return false;
+        var joined = Segment(joinedHead + tail, -1).Cost;
         var split = Segment(head, -1).Cost + 1 + Segment(tail, -1).Cost;
         return joined < split;
     }

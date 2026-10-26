@@ -899,6 +899,33 @@ internal static class LanguageLearningTests
         }
     }
 
+    [Test]
+    public static void EnglishWordEndingInConsonant_AtEndAfterJapanese()
+    {
+        // kyouhahub が きょうはふb のまま確定されていた。打ち終わった時点で残る子音 (b) は日本語にならないので、
+        // 文の途中の読めない英字 (korehahubdesu の b) と同じく英語の根拠にする。打ち終わった日本語 (にほん) は今までどおり。
+        CompositionTests.Detector.SpellChecker = TestSupport.WordChecker is { IsAvailable: true } checker ? checker : Detection.BuiltInWordChecker.Shared;
+        try
+        {
+            foreach (var (typed, expected) in new[]
+            {
+                ("kyouhahub", "きょうはhub"), ("githubnohub", "githubのhub"), ("sorehabug", "それはbug"), ("korehahubdesu", "これはhubです"),
+                ("hub", "hub"), ("kyouhanihon", "きょうはにほん"), ("kyouhasushi", "きょうはすし"),
+                // 日本語の語尾に付いた打ち間違いの子音は、語尾を英単語 (sub・sham) に取らない
+                ("yoroshikuonegaishimasub", "よろしくおねがいしますb"), ("kaisham", "かいしゃm"),
+            })
+            {
+                var k = new CompositionTests.Keyboard();
+                k.Type(typed + "\n");
+                Assert.Equal(expected, k.Host.Document, typed);
+            }
+        }
+        finally
+        {
+            CompositionTests.Detector.SpellChecker = null;
+        }
+    }
+
 
     [Test]
     public static void SymbolCandidates_ShowHalfOrFullWidth()
