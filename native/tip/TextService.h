@@ -83,6 +83,7 @@ private:
 
     // test: OnTestKeyDown から (入力欄の種類を読んだ結果を、続く OnKeyDown で使うために覚える)
     bool WouldEat(ITfContext* context, UINT vk, LPARAM lParam, wchar_t& ch, bool test);
+    void NoteKey(ITfContext* context, UINT vk);  // 調べるとき用: 入力欄が変わってから最初に届いたキーをログに書く
     void ForgetSecretField();
     bool IsReinjected(UINT vk);
     bool ServerReady();
@@ -154,6 +155,8 @@ private:
     bool macControlKeys_ = false;  // 入力中の Ctrl+キーが Mac 式 (Meltype.exe の応答の macControlKeys)
     std::wstring controlKeys_;     // 変換中に Meltype.exe へ送る Ctrl+キーの一覧 (応答の controlKeys。空なら macControlKeys_ で決め打ちの表を使う)
     bool focusMissing_ = false;    // TSF のフォーカスに入力欄 (文書) が無い (ログに変わり目だけ書くため)
+    bool keySeen_ = false;         // 入力欄が変わってから、キーが届いたことをログに書いたか
+    int keyForeground_ = -1;       // TSF がこの IME にキーを渡すか (ITfKeyEventSink::OnSetFocus。-1 はまだ分からない。ログに変わり目だけ書くため)
     ULONGLONG lastHello_ = 0;
     bool open_ = true;
     bool codeApp_ = false;         // コードエディター・ターミナル (Meltype.exe の応答の code)
