@@ -162,13 +162,16 @@ public sealed class ConversionHistory
         _saver.WriteNow();
     }
 
-    /// <summary>読みが prefix で始まり prefix より長い、学習した変換の語 (新しく使ったものから。Entries() から探すのと同じ順)。</summary>
+    /// <summary>
+    /// 読みが prefix で始まり prefix より長い、学習した変換の語 (新しく使ったものから。Entries() から探すのと同じ順)。
+    /// 予測変換に出すので、語の記号は読みの形 (句読点などの設定どおり) に直して返す。
+    /// </summary>
     public IEnumerable<string> TextsStartingWith(string prefix)
     {
         if (_index is not { } index || index.Version != Version)
         {
             var order = 0;
-            var items = _entries.Select(e => (e.Key, e.Value.Text, e.Value.Used, order++)).ToArray();
+            var items = _entries.Select(e => (e.Key, SymbolForms.Keep(e.Value.Text, e.Key), e.Value.Used, order++)).ToArray();
             Array.Sort(items, (a, b) => string.CompareOrdinal(a.Key, b.Key));
             _index = index = (Version, items);
         }

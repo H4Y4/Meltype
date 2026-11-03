@@ -33,7 +33,11 @@ public sealed class PhraseHistory
                 var parts = line.Split('\t');
                 if (parts.Length < 4 || parts[0].Length == 0 || parts[1].Length == 0) continue;
                 if (!int.TryParse(parts[2], out var count) || !long.TryParse(parts[3], out var used)) continue;
-                _entries[(parts[0], parts[1])] = (Math.Max(1, count), used);
+                // 前に記号の形が変わったまま覚えた語句 (，よりはやく → ,より早く) も、読みの記号の形に直して読む。同じ語句になったらまとめる
+                var key = (parts[0], SymbolForms.Keep(parts[1], parts[0]));
+                _entries[key] = _entries.TryGetValue(key, out var same)
+                    ? (same.Count + Math.Max(1, count), Math.Max(same.Used, used))
+                    : (Math.Max(1, count), used);
             }
         }
         catch (Exception ex)
@@ -48,7 +52,8 @@ public sealed class PhraseHistory
     public void Remember(string reading, string text)
     {
         if (reading.Length < 3 || text.Length == 0 || text == reading || text.Contains('\t') || text.Contains('\n')) return;
-        var key = (reading, text);
+        // 記号は読みの形 (句読点などの設定どおり) で覚える
+        var key = (reading, SymbolForms.Keep(text, reading));
         lock (_gate)
         {
             var count = _entries.TryGetValue(key, out var old) ? old.Count + 1 : 1;
