@@ -338,6 +338,9 @@ public sealed class MeltypeSession
     // 半角/全角 で、コードの行でも日本語にしている (改行しても続ける。Meltype キーボードと同じ)
     private bool _codeJapanese;
 
+    // コードの行として英字のまま通したことをログに書いたか (変換ボックスにキーが入るか、コードの行の日本語を切り替えるまで書かない)
+    private bool _codePassLogged;
+
     /// <summary>
     /// コードの入力欄で、コードの行を日本語にする (japanese) / 英数に戻す。半角/全角 を押したとき。
     /// コードの行 (コメント・文字列の外) を日本語にしたとき、日本語にしていたのを英数に戻したときに true。
@@ -351,11 +354,13 @@ public sealed class MeltypeSession
         {
             if (!_codeJapanese) return false;
             _codeJapanese = false;
+            _codePassLogged = false;
             Diagnostics.Log.Info("コードの行: 英数に戻す");
             return true;
         }
         if (_codeJapanese || before is not null && LineContext.ClassifyText(before) != LineKind.Code) return false;
         _codeJapanese = true;
+        _codePassLogged = false;
         Diagnostics.Log.Info("コードの行: 日本語で入力 (改行しても続ける。キャレットが別の場所に移るか、もう一度押すまで)");
         return true;
     }
@@ -463,6 +468,13 @@ public sealed class MeltypeSession
         if (CodeInput && !_codeJapanese && !_controller.IsComposing &&
             (before is null || LineContext.ClassifyText(before) == LineKind.Code))
         {
+            // 調べるとき用: コードの行として英字のまま通した。続けて通すあいだは 1 回だけ書く (文字そのものは書かない)。
+            // ターミナルで日本語にならないとき、この判定で通したのか、キーが届いていないのかを見分ける
+            if (!modifier && !_codePassLogged)
+            {
+                _codePassLogged = true;
+                Diagnostics.Log.Info($"コードの行なので英数のままアプリに通します ({(CodeTerminal ? "ターミナル" : "エディター")}、キャレットの前: {(before is null ? "読めない" : $"{before.Length} 文字")})");
+            }
             TrackCodeKey(vk, ch, modifier);
             return Track(_host.Result(consumed: false), vk, ch, modifier);
         }
@@ -480,6 +492,7 @@ public sealed class MeltypeSession
         if (modifier && _controller.IsComposing) Feed(new KeyEvent(control ? VirtualKeys.LControl : VirtualKeys.LMenu, 0, false, true, false, down.TimeMs));
         if (shift && _controller.IsComposing) Feed(new KeyEvent(VirtualKeys.LShift, 0, false, true, false, down.TimeMs));
         var result = _host.Result(consumed);
+        if (consumed) _codePassLogged = false;
         if (CodeInput)
         {
             foreach (var edit in result.Commits)

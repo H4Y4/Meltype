@@ -288,6 +288,8 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* threadMgr, TfClientId clientI
     for (Reinjected& pending : reinjected_) pending = {};
     passVk_ = 0;
     passReason_ = nullptr;
+    keySeen_ = false;
+    keyForeground_ = -1;
     keyFailed_ = false;
     consumed_ = true;
     for (bool& eaten : eatenDown_) eaten = false;
@@ -468,11 +470,19 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* focus, ITfDocumentMgr*) {
         focusMissing_ = missing;
         TipLog(missing ? L"フォーカス: 入力欄なし (TSF の文書が無いので、キーは IME を通らずにアプリへ入ります)" : L"フォーカス: 入力欄あり");
     }
+    // 調べるとき用: 入力欄が変わってから最初に届いたキーを書く (NoteKey)。これが無いのに打っていたら、キーが IME に届いていない
+    keySeen_ = false;
     AdviseTextEditSink(focus);
     return S_OK;
 }
 
 STDMETHODIMP TextService::OnSetFocus(BOOL foreground) {
+    // 調べるとき用: TSF がこの IME にキーを渡すかどうかの変わり目 (前面のスレッドが変わる・ほかの IME に移るときに呼ばれる)
+    int now = foreground ? 1 : 0;
+    if (now != keyForeground_) {
+        keyForeground_ = now;
+        TipLog(foreground ? L"キーの受け取り: 届きます (前面)" : L"キーの受け取り: 届きません (前面でない・ほかの IME)");
+    }
     if (!foreground && candidates_) candidates_->Hide();
     // 別アプリの設定画面から戻ったとき、キー入力の前に最新設定を読み直す。
     if (foreground && !disabled_) Hello();
@@ -905,6 +915,9 @@ bool TextService::WouldEat(ITfContext* context, UINT vk, LPARAM lParam, wchar_t&
     // (同期で確定できなければ、あとで確定する。キャレットは動かさず、前の語も確定し直さない)
     if (vk == VK_PACKET || vk == VK_PROCESSKEY) {
         if (vk == VK_PACKET && composition_ != nullptr && !CommitNow(true)) CommitAsync(true);
+        const wchar_t* reason = vk == VK_PACKET ? L"ほかのソフトが送り込んだ文字" : L"ほかの IME が処理したキー";
+        if (passReason_ != reason) TipLog(L"キーを通します: %s", reason);
+        passReason_ = reason;
         return false;
     }
     if (composition_ != nullptr && compositionContext_ != context) {
@@ -921,7 +934,10 @@ bool TextService::WouldEat(ITfContext* context, UINT vk, LPARAM lParam, wchar_t&
                 staleTime_ = now;
             }
             if (staleCommitTries_ <= 1) {
-                if (!counted) CommitAsync(true);
+                if (!counted) {
+                    CommitAsync(true);
+                    TipLog(L"キーを通します: 前の入力欄の変換中の文字を確定できない");
+                }
                 return false;
             }
             AbandonComposition();
@@ -1024,8 +1040,17 @@ bool TextService::IsReinjected(UINT vk) {
     return false;
 }
 
+void TextService::NoteKey(ITfContext* context, UINT vk) {
+    if (keySeen_ || IsModifier(vk)) return;
+    keySeen_ = true;
+    // どのキーかは書かない
+    TipLog(L"キーが届きました (入力欄が変わってから最初。入力欄の文脈: %s、入力モード: %s、Meltype.exe: %s)",
+           context != nullptr ? L"あり" : L"なし", open_ ? L"日本語" : L"英数", serverActive_ ? L"つながっている" : L"つながっていない");
+}
+
 STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPARAM lParam, BOOL* eaten) {
     UINT vk = static_cast<UINT>(wParam);
+    NoteKey(context, vk);
     if (IsReinjected(vk)) {
         passVk_ = vk;  // アプリによっては、このあと OnKeyDown も呼ぶ
         passTime_ = GetTickCount64();
@@ -1047,6 +1072,7 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
 
 STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM lParam, BOOL* eaten) {
     UINT vk = static_cast<UINT>(wParam);
+    NoteKey(context, vk);
     if ((vk == passVk_ && GetTickCount64() - passTime_ < 500) || IsReinjected(vk)) {
         passVk_ = 0;
         directEnglishWord_ = false;
