@@ -1560,6 +1560,7 @@ public sealed class CompositionController
                 ? learned ?? _options.ContextRules?.ChooseOver(clause.Reading, surrounding, clause.Text)
                 : _options.ContextRules?.Choose(clause.Reading, surrounding) ?? learned;
             if (preferred is not null) Prefer(clause, preferred);
+            KeepSymbolForms(clause);
         }
         return clauses;
     }
@@ -1654,7 +1655,10 @@ public sealed class CompositionController
             parts = [new ConversionClause(kana, string.Concat(parts.Select(p => p.Text)))];
         }
         parts = JoinDateTime(JoinSmallKana(parts));
-        var clauses = parts.Select(p => new Clause(p.Reading, false, JapaneseCandidates(p.Reading, NormalizeHalfWidth(p.Text, p.Reading)))).ToList();
+        // 変換エンジンは読みの記号を自分の形にして返す (Mozc は ， の読みを , にする)。区切りはそのままで、読みは打ったとおりに戻す
+        // (記号の形を設定どおりに保つ・文節の区切りを動かして変換し直すときも設定の記号を使う)。
+        parts = TypedReadings(parts, kana);
+        var clauses = parts.Select(p => new Clause(p.Reading, false, JapaneseCandidates(p.Reading, SymbolForms.Keep(NormalizeHalfWidth(p.Text, p.Reading), p.Reading)))).ToList();
         for (var i = 0; i < clauses.Count; i++)
         {
             var others = string.Concat(clauses.Where((_, k) => k != i).Select(c => c.Text));
@@ -1681,8 +1685,38 @@ public sealed class CompositionController
             var math = AddMathSymbol(clauses, i);
             preferred ??= math;
             if (preferred is not null) Prefer(clauses[i], preferred);
+            // 学習した変換 (手がかり辞書・ユーザーが選び直したもの) の記号も、設定どおりの形にする
+            KeepSymbolForms(clauses[i]);
         }
         return clauses;
+    }
+
+    /// <summary>
+    /// 変換エンジンの文節の読みを、打ったかな (kana) の同じ位置の文字に置き換える。変換エンジンが読みの文字数を変えた
+    /// (区切りの位置が対応しない) ときは、変換エンジンの読みのまま。
+    /// </summary>
+    private static IReadOnlyList<ConversionClause> TypedReadings(IReadOnlyList<ConversionClause> parts, string kana)
+    {
+        if (parts.Sum(p => p.Reading.Length) != kana.Length || string.Concat(parts.Select(p => p.Reading)) == kana) return parts;
+        var result = new List<ConversionClause>(parts.Count);
+        var offset = 0;
+        foreach (var part in parts)
+        {
+            result.Add(part with { Reading = kana.Substring(offset, part.Reading.Length) });
+            offset += part.Reading.Length;
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// 文節の最初の候補の記号 (、 ， , （ ( ！ ! …) を、読みの記号の形 (句読点・括弧などの設定どおりに作ったもの) にする。
+    /// 変換エンジンの学習で記号の幅が変わっても、設定のほうを優先する。候補から別の形を選ぶことはできる。
+    /// </summary>
+    private static void KeepSymbolForms(Clause clause)
+    {
+        if (clause.IsEnglish) return;
+        var kept = SymbolForms.Keep(clause.Text, clause.Reading);
+        if (kept != clause.Text) Prefer(clause, kept);
     }
 
     /// <summary>計算の言葉 (かける・わる …) の文節の読み。前後に数字が付いていてもよい (変換エンジンが 3かける を 1 つの文節にする)。</summary>
@@ -2322,13 +2356,14 @@ public sealed class CompositionController
         clause.Raw = null;
         clause.Translations.Clear();
         if (_options.History?.Get(clause.Reading) is { } learned) Prefer(clause, learned);
+        KeepSymbolForms(clause);
     }
 
     /// <summary>同じかなを何度も変換しないようにキャッシュする。</summary>
     private string Convert(string kana)
     {
         if (_conversionCache.TryGetValue(kana, out var cached)) return cached;
-        var converted = NormalizeHalfWidth(_converter.Convert(kana) ?? kana, kana);
+        var converted = SymbolForms.Keep(NormalizeHalfWidth(_converter.Convert(kana) ?? kana, kana), kana);
         if (_conversionCache.Count > 256) _conversionCache.Clear();
         _conversionCache[kana] = converted;
         return converted;
@@ -2634,7 +2669,9 @@ public sealed class CompositionController
             // 英訳は上で英訳の記録に入れた (ここで覚えると次から 1 番目に出てしまう)。
             if (clause.Translations.Contains(clause.Text)) continue;
             if (IsDateTimeChoice(clause) || IsMathSymbolChoice(clause)) continue;
-            history.Remember(clause.Reading, clause.Text);
+            // 記号だけの文節 (！？ → !?) の形は設定で決まるので覚えない。語と記号の文節 (ひに， → 火に,) は、記号を設定どおりの形にして覚える
+            if (IsSymbolOnly(clause.Reading)) continue;
+            history.Remember(clause.Reading, SymbolForms.Keep(clause.Text, clause.Reading));
         }
     }
 
@@ -2656,7 +2693,9 @@ public sealed class CompositionController
         }
         foreach (var clause in _clauses)
         {
-            if (clause.IsEnglish || clause.Text == clause.Raw || clause.Translations.Contains(clause.Text) || clause.Reading.Any(char.IsAsciiLetterOrDigit) || IsDateTimeChoice(clause) || IsMathSymbolChoice(clause))
+            // 記号を含む文節は覚えさせない。記号の形は設定で決める (Mozc は記号の幅を覚え、ほかの語の記号まで変えてしまう:
+            // ， を 1 回 、 にして確定すると、以後の ， ． がすべて半角の , . になった)
+            if (clause.IsEnglish || clause.Text == clause.Raw || clause.Translations.Contains(clause.Text) || clause.Reading.Any(char.IsAsciiLetterOrDigit) || SymbolForms.Contains(clause.Reading) || IsDateTimeChoice(clause) || IsMathSymbolChoice(clause))
             {
                 Flush();
                 continue;
