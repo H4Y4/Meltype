@@ -74,7 +74,7 @@ public static unsafe class Exports
         try
         {
             var wordChecker = s_isWord == null ? null : new CallbackWordChecker();
-            // Mac 版で Zenzai を使うときは、前後の文脈を読む変換エンジンとして渡す (MacConverter)。Linux 版 (Mozc) と、Zenzai を止めた Mac 版は HybridConverter
+            // Mac 版で Zenzai を使うときは、前後の文脈を読む変換エンジンとして渡す (ContextAwareBackgroundConverter)。Linux 版 (Mozc) と、Zenzai を止めた Mac 版は HybridConverter
             var session = s_mozc is null
                 ? MeltypeSession.CreateDefault(UsesZenzai() ? s_mac : s_converter, s_converter.Candidates, wordChecker, autoSpacing: true, shiftArrowPaging: true)
                 : MeltypeSession.CreateDefault(s_converter, s_converter.Candidates, wordChecker);
@@ -117,7 +117,7 @@ public static unsafe class Exports
     }
 
     /// <summary>Mac 版で Zenzai を使うときの、入力欄の変換エンジン (s_callback を前後の文脈を読む変換エンジンとして渡す)。</summary>
-    private static readonly MacConverter s_mac = new(s_callback);
+    private static readonly ContextAwareBackgroundConverter s_mac = new(s_callback);
 
     /// <summary>
     /// 設定「Zenzai を使う」(Mac 版は azooKey の Zenzai)。読めないときは使わない (meltype_zenzai_model と同じ)。
@@ -490,29 +490,6 @@ public static unsafe class Exports
                 if (followingPointer != null) NativeMemory.Free(followingPointer);
             }
         }
-    }
-
-    /// <summary>
-    /// Mac 版の Zenzai (azooKey) を、前後の文脈を読むニューラルの変換エンジン (IContextAwareConverter) として本体に渡す。
-    /// 本体は、手がかり辞書を控えめに使い、学習を先にし、前の文の文脈と後ろの文脈 (確定済みの文字・後ろの英単語) も渡す。
-    /// 変換はワーカー (BackgroundCallbackConverter) を通すので、入力のスレッドは待たない。
-    /// </summary>
-    private sealed class MacConverter(BackgroundCallbackConverter worker) : IKanjiConverter, IContextAwareConverter, IBackgroundConverter
-    {
-        public ConversionBudget Budget => worker.Budget;
-
-        public event Action? ResultReady
-        {
-            add => worker.ResultReady += value;
-            remove => worker.ResultReady -= value;
-        }
-
-        public string? Convert(string hiragana) => worker.Convert(hiragana);
-
-        public IReadOnlyList<ConversionClause>? ConvertClauses(string hiragana, string? context = null) => worker.ConvertClauses(hiragana, context);
-
-        public IReadOnlyList<ConversionClause>? ConvertClauses(string hiragana, string? context, string? following) =>
-            worker.ConvertClauses(hiragana, context, following);
     }
 
     private sealed class CallbackWordChecker : IWordChecker

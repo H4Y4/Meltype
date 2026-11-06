@@ -3257,7 +3257,9 @@ public sealed class CompositionController
         List<(string Reading, string Text)> clauses;
         try
         {
-            clauses = WithoutWaiting(() => ConvertJapanese(kana).Select(c => (c.Reading, c.Text)).ToList());
+            // 前後の文脈を読むニューラルの変換エンジン (Mac の Zenzai) は 1 回の変換に数十ミリ秒かかるので、待たないと打つたびに
+            // かなを出してから漢字に作り直し、確定していない文字がちらつく。少しだけ待ち、待ちきれなければ後で作り直す
+            clauses = WaitAtMost(Neural ? NeuralLiveWaitMs : 0, () => ConvertJapanese(kana).Select(c => (c.Reading, c.Text)).ToList());
         }
         finally
         {
@@ -3269,7 +3271,15 @@ public sealed class CompositionController
         return clauses;
     }
 
-    private T WithoutWaiting<T>(Func<T> convert) => _budget is null ? convert() : _budget.WithLimit(0, convert);
+    private T WithoutWaiting<T>(Func<T> convert) => WaitAtMost(0, convert);
+
+    private T WaitAtMost<T>(int milliseconds, Func<T> convert) => _budget is null ? convert() : _budget.WithLimit(milliseconds, convert);
+
+    /// <summary>
+    /// ニューラルの変換エンジンで、ライブ変換が 1 打鍵で答えを待つ上限 (ミリ秒)。Mac の Zenzai の変換は平均 31 ミリ秒ほど
+    /// (前の版は答えが出るまで待っていた)。これを超えたときだけ、かなで出して、答えが届いてから作り直す。
+    /// </summary>
+    private const int NeuralLiveWaitMs = 150;
 
     /// <summary>今の表示 (ライブ変換が有効なら日本語区間は漢字に変換済み)。</summary>
     private string CurrentDisplay(bool final) =>

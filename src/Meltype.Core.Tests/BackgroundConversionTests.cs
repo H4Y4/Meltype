@@ -551,4 +551,82 @@ internal static class BackgroundConversionTests
         Thread.Sleep(500);
         Assert.Equal(before, Volatile.Read(ref notified));
     }
+
+    [Test]
+    public static void ContextAware_SettlesAfterTheAnswersArrive()
+    {
+        // Mac 版 (Zenzai): 前後の文脈を読む変換エンジンをワーカー越しに使う。答えが届いた知らせ (ResultReady) で作り直したら、
+        // 知らせは止まり、表示も行き来しない (確定していない文字がちらつかない)
+        var requests = new List<string>();
+        using var worker = new BackgroundCallbackConverter(
+            (reading, _) => [new ConversionClause(reading, reading + "!")],
+            _ => [],
+            clausesWithFollowing: (reading, context, following) =>
+            {
+                lock (requests) requests.Add($"[{reading}|{context}|{following}]");
+                Thread.Sleep(5);
+                return [new ConversionClause(reading, reading + "!")];
+            });
+        var converter = new ContextAwareBackgroundConverter(worker);
+        converter.Budget.Enable();
+        var notified = 0;
+        converter.ResultReady += () => Interlocked.Increment(ref notified);
+        var phrases = new PhraseHistory(null);
+        phrases.Remember("へんかんせいど", "変換精度");
+        foreach (var keys in new[] { "githubnohenkann", "henkanseido", "meltypenohennkanseido", "kyouhaiitenki" })
+        {
+            var session = new MeltypeSession(CompositionTests.Detector, converter,
+                new CompositionOptions { LiveConversion = () => true, Predictor = new Predictor(phrases, null, null), Predictions = () => true }, () => new Settings());
+            SessionFacadeTests.Type(session, keys);
+            lock (requests) requests.Clear();
+            var shown = new List<string>();
+            var handled = 0;
+            var watch = Stopwatch.StartNew();
+            Volatile.Write(ref notified, 0);
+            while (watch.ElapsedMilliseconds < 1500)
+            {
+                // フロントと同じく、知らせが来たときだけ作り直す
+                if (Volatile.Read(ref notified) > handled)
+                {
+                    handled = Volatile.Read(ref notified);
+                    if (session.RefreshConversion()?.View is { } view) shown.Add(view.Text);
+                }
+                Thread.Sleep(5);
+            }
+            string asked;
+            lock (requests) asked = string.Join(" ", requests.GroupBy(r => r).Select(g => g.Key + "x" + g.Count()));
+            Assert.True(handled <= 5, $"{keys}: 答えが届いたら知らせは止まる (知らせ {handled} 回、表示 {string.Join(" / ", shown.Distinct().Take(4))}、頼み {asked})");
+            Assert.True(shown.Count < 2 || shown[^1] == shown[^2], $"{keys}: 最後は同じ表示のまま ({string.Join(" / ", shown.TakeLast(4))})");
+        }
+    }
+
+    [Test]
+    public static void ContextAware_LiveConversionWaitsBriefly_SoTheKanaDoesNotFlash()
+    {
+        // Mac 版 (Zenzai): 変換に数十ミリ秒かかるので、ライブ変換が答えを待たないと、打つたびに変換前のかなを出してから
+        // 漢字に作り直すことになり、確定していない文字がちらついていた。少しだけ待ち、待ちきれないときだけ後で作り直す
+        foreach (var (delay, waits) in new[] { (40, true), (400, false) })
+        {
+            using var worker = new BackgroundCallbackConverter(
+                (reading, _) => [new ConversionClause(reading, reading + "!")],
+                _ => [],
+                clausesWithFollowing: (reading, _, _) =>
+                {
+                    Thread.Sleep(delay);
+                    return [new ConversionClause(reading, reading + "!")];
+                });
+            var converter = new ContextAwareBackgroundConverter(worker);
+            converter.Budget.Enable();
+            var session = new MeltypeSession(CompositionTests.Detector, converter, new CompositionOptions { LiveConversion = () => true }, () => new Settings());
+            var watch = Stopwatch.StartNew();
+            var shown = SessionFacadeTests.Type(session, "henkann")[^1].View?.Text;
+            var elapsed = watch.ElapsedMilliseconds;
+            if (waits) Assert.Equal("へんかん!", shown, $"{delay} ms の変換は待って、変換した文字で出す");
+            else
+            {
+                Assert.Equal("へんかん", shown, $"{delay} ms の変換は待ちきれないので、かなで出す");
+                Assert.True(elapsed < 1500, $"待ちきれないときに止まらない ({elapsed} ms)");
+            }
+        }
+    }
 }
