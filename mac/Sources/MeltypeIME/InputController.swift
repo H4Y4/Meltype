@@ -255,7 +255,7 @@ final class MeltypeInputController: IMKInputController, ModeServiceTarget {
         candidatesWindow?.hide()
         suggestionPanel?.orderOut(nil)
         displayedSuggestion = nil
-        meaningKey = nil
+        hideMeaning()
         candidateList = []
         super.deactivateServer(sender)
     }
@@ -552,7 +552,7 @@ final class MeltypeInputController: IMKInputController, ModeServiceTarget {
         candidatesWindow?.hide()
         suggestionPanel?.orderOut(nil)
         displayedSuggestion = nil
-        meaningKey = nil
+        hideMeaning()
     }
 
     private func showSuggestion(_ suggestion: String?, client: IMKTextInput) {
@@ -608,18 +608,36 @@ final class MeltypeInputController: IMKInputController, ModeServiceTarget {
         text.addAttributes(attributes, range: range)
     }
 
-    /// 候補で少し (1.5 秒) 止まったら、その候補の意味を候補ウィンドウの注釈に出す (Windows 版と同じ)。
+    /// 出そうとしている意味 (選んでいる候補の番号と意味)。候補を動かしたら、前の候補の意味は出さない。
     private var meaningKey: String?
 
-    private func scheduleMeaning(_ view: CompositionView) {
-        let key = view.meaning.map { "\(view.selectedIndex):\($0)" }
-        guard key != meaningKey else { return }
-        meaningKey = key
-        guard let key, let meaning = view.meaning else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            guard let self, self.meaningKey == key, let window = candidatesWindow, window.isVisible() else { return }
-            window.showAnnotation(NSAttributedString(string: meaning))
+    /// 選んでいる候補の意味を、候補の一覧の横のパネルにすぐ出す (macOS 標準の日本語入力と同じ。Windows 版は 1.5 秒止まったとき)。
+    /// 候補の一覧は作り直すと位置が変わり、新しい位置はこの周回の後で決まるので、次の周回で位置を読んでから出す。
+    private func showMeaning(_ view: CompositionView, client: IMKTextInput) {
+        guard let meaning = view.meaning, !meaning.isEmpty else {
+            hideMeaning()
+            return
         }
+        let key = "\(view.selectedIndex):\(meaning)"
+        meaningKey = key
+        let level = panelLevel(Self.defaultCandidatesLevel, above: client)
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.meaningKey == key, let window = candidatesWindow, window.isVisible(),
+                  let frame = Self.candidatesFrame(window) else { return }
+            MeaningPanel.shared.show(meaning, beside: frame, level: level)
+        }
+    }
+
+    private func hideMeaning() {
+        meaningKey = nil
+        MeaningPanel.shared.hide()
+    }
+
+    /// 候補の一覧の枠 (画面の座標)。IMKCandidates が返さないときは、このプロセスにある見えている IMK のウィンドウ (IMKUIPanel) の枠。
+    private static func candidatesFrame(_ window: IMKCandidates) -> NSRect? {
+        let frame = window.candidateFrame()
+        if frame.width > 0 && frame.height > 0 { return frame }
+        return NSApp.windows.first { $0.isVisible && String(describing: type(of: $0)).hasPrefix("IMK") }?.frame
     }
 
     private func updateCandidates(_ view: CompositionView, client: IMKTextInput) {
@@ -654,9 +672,9 @@ final class MeltypeInputController: IMKInputController, ModeServiceTarget {
                     selectInWindow(window, index: wantedIndex)
                 }
             }
-            scheduleMeaning(view)
+            showMeaning(view, client: client)
         } else {
-            meaningKey = nil
+            hideMeaning()
             candidateList = []
             window.hide()
         }
