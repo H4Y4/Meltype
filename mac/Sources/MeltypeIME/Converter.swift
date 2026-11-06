@@ -14,14 +14,21 @@ final class MeltypeConverter {
     // ビルドしたマシンのフォルダーしか見ない。辞書のバンドルは Contents/Resources に入れているので、見つからずに落ちていた (#26)。
     // (Meltype.app の直下には置けない: 署名が通らない)。なので、辞書の場所をこちらで渡す。
     private let converter = KanaKanjiConverter(dicdataStore: DicdataStore(dictionaryURL: MeltypeConverter.resource("Dictionary")))
-    /// 候補の一覧 (辞書と統計だけの変換) 用の、もう 1 つの変換エンジン。ニューラル変換を使うときだけ作る。
-    /// azooKey は、前回と同じ読みが来ると前回の内部状態 (ラティス) を使い回す。ニューラル変換の直後に、同じ変換エンジンで
-    /// 同じ読みを辞書と統計だけで変換すると、その状態が食い違っていて配列の範囲外を読み、IME ごと落ちる
-    /// (にゅうりょく・しゅうせい を変換して Space を押すだけで落ちた)。変換エンジンを分けて、状態が混ざらないようにする。
-    private lazy var listConverter = KanaKanjiConverter(dicdataStore: DicdataStore(dictionaryURL: MeltypeConverter.resource("Dictionary")))
-    private let directory: URL
-    /// ニューラル変換 (Zenzai) のモデル。同梱していない・設定で止めているときは nil (辞書と統計だけで変換する)。
-    private let zenzaiWeight: URL?
+    private var options: ConvertRequestOptions
+    /// Zenzai (ニューラルかな漢字変換) のモデル。無ければ Zenzai を使わない。
+    private let zenzModel: URL?
+    /// Zenzai の変換を待つ上限 (Windows の Zenzai と同じ 1500 ms)。超えたら Zenzai なしの変換を使う。ワーカーで待つので入力は止めない。
+    private static let zenzaiTimeout: TimeInterval = 1.5
+    /// これより長い読みは Zenzai に渡さない (Windows の Zenzai と同じ。長いほど推論が長い)。
+    private static let zenzaiMaxReading = 80
+    /// 打ち切ったときに Zenzai を使わない長さ (Windows の Zenzai と同じ 5 秒)。打ち切った変換が動いている間は .busy で断る。
+    private static let zenzaiPause: TimeInterval = 5
+    /// Zenzai はこの時刻まで使わない。
+    private var zenzaiPausedUntil = Date.distantPast
+    /// Zenzai の変換は、別の変換エンジンで別のスレッドで動かす (待つ時間に上限を付けるため。azooKey の変換は途中で止められない)。
+    /// 本体の converter は Zenzai を使わない (候補の一覧と、Zenzai が使えないときの変換)。azooKey は前回と同じ読みが来ると
+    /// 前回の内部状態 (ラティス) を使い回すので、1 つの変換エンジンに Zenzai と辞書だけの変換を混ぜると、範囲外を読んで IME ごと落ちる。
+    private let zenzaiWorker: ZenzaiWorker?
     /// 後ろの文脈 (変換する読みのすぐ後ろに続く文字) を渡すか。後ろの文脈を読めるのは zenz-v3.2 から。
     /// それより前のモデルに渡すと悪化する (AJIMEE-Bench を前後に分けた 70 件: v3.2 は 65 → 67 件、v3.1 は 57 件)。
     private let passesFollowing: Bool
@@ -43,40 +50,33 @@ final class MeltypeConverter {
         return directory.appendingPathComponent("emoji_all_E15.0.txt", isDirectory: false)
     }
 
-    /// ニューラル変換の推論の回数の上限。1 回だと速いが精度が落ち、5 回より増やしてもほとんど変わらない
-    /// (AJIMEE-Bench の 1 位の正解率: 使わない 44% / 1 回 67% / 3 回 84% / 5 回 86% / 10 回 86%)。
-    private static let zenzaiInferenceLimit = 5
-
-    /// 同梱のニューラル変換のモデル (build.sh が Contents/Resources/zenz に入れる)。
-    /// `defaults write io.github.yksr-melt.inputmethod.Meltype DisableNeuralConversion -bool true` で止められる (Meltype を起動し直すと反映)。
-    private static func bundledZenzaiWeight() -> URL? {
-        if UserDefaults.standard.bool(forKey: "DisableNeuralConversion") { return nil }
-        let directory = (Bundle.main.resourceURL ?? Bundle.main.bundleURL).appendingPathComponent("zenz", isDirectory: true)
-        let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
-        return files.filter { $0.pathExtension == "gguf" }.sorted { $0.lastPathComponent < $1.lastPathComponent }.last
+    /// zenz のモデル (gguf)。設定「Zenzai を使う」が OFF なら nil (issue #1130)。
+    /// 設定「Zenzai: モデル (GGUF) の場所」があればそれを、空なら Meltype.app に同梱の Resources/zenz/ の .gguf を使う
+    /// (名前は見ない: 版とファイル名は native/zenzai/zenzai.env だけに書く)。
+    private static func findZenzModel() -> URL? {
+        guard let configured = NativeCore.shared.zenzaiModelSetting else { return nil }
+        let path = configured.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !path.isEmpty {
+            let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath, isDirectory: false)
+            if FileManager.default.fileExists(atPath: url.path) { return url }
+            NSLog("Meltype: Zenzai のモデルが見つかりません: %@", url.path)
+            return nil
+        }
+        guard let directory = Bundle.main.resourceURL?.appendingPathComponent("zenz", isDirectory: true),
+              let names = try? FileManager.default.contentsOfDirectory(atPath: directory.path) else { return nil }
+        return names.filter { $0.hasSuffix(".gguf") }.sorted().first.map { directory.appendingPathComponent($0, isDirectory: false) }
     }
+
+    var usesZenzai: Bool { zenzModel != nil }
 
     private init() {
         // azooKey の学習データ・ユーザー辞書の置き場所 (Meltype では学習しない設定にしているので、ほぼ使わない)。
-        directory = (NativeCore.shared.dataDirectory.map { URL(fileURLWithPath: $0, isDirectory: true) }
+        let directory = (NativeCore.shared.dataDirectory.map { URL(fileURLWithPath: $0, isDirectory: true) }
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("Meltype", isDirectory: true))
             .appendingPathComponent("azooKey", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        zenzaiWeight = MeltypeConverter.bundledZenzaiWeight()
-        passesFollowing = zenzaiWeight?.lastPathComponent.hasPrefix("zenz-v3.2") == true
-        NSLog("Meltype: ニューラル変換 (Zenzai) %@", zenzaiWeight.map { "を使います: \($0.lastPathComponent)" } ?? "は使いません")
-    }
-
-    /// 変換の設定。context を渡すと、ニューラル変換がキャレットの前の文字を文脈として使う (この本は + あつい → 厚い)。
-    /// neural が false なら、辞書と統計だけで変換する (候補の一覧用: 速く、候補の種類が多い)。
-    private func options(neural: Bool, context: String?, following: String? = nil) -> ConvertRequestOptions {
-        var zenzai = ConvertRequestOptions.ZenzaiMode.off
-        if neural, let zenzaiWeight {
-            zenzai = .on(weight: zenzaiWeight, inferenceLimit: MeltypeConverter.zenzaiInferenceLimit, personalizationMode: nil,
-                         versionDependentMode: .v3(.init(leftSideContext: context, rightSideContext: passesFollowing ? following : nil)))
-        }
-        return ConvertRequestOptions(
+        options = ConvertRequestOptions(
             requireJapanesePrediction: .disabled,
             requireEnglishPrediction: .disabled,
             keyboardLanguage: .ja_JP,
@@ -85,33 +85,68 @@ final class MeltypeConverter {
             sharedContainerURL: directory,
             textReplacer: TextReplacer(emojiDataProvider: { MeltypeConverter.emojiDictionary() }),
             specialCandidateProviders: KanaKanjiConverter.defaultSpecialCandidateProviders,
-            zenzaiMode: zenzai,
             metadata: .init(versionString: "Meltype \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown")")
         )
+        // init の中では self を閉包に入れられないので、ローカルの値で作る
+        let model = Self.findZenzModel()
+        let requestOptions = options
+        zenzModel = model
+        passesFollowing = model?.lastPathComponent.hasPrefix("zenz-v3.2") == true
+        NSLog("Meltype: ニューラル変換 (Zenzai) %@", model.map { "を使います: \($0.lastPathComponent)" } ?? "は使いません")
+        if let model {
+            zenzaiWorker = ZenzaiWorker(dictionaryURL: MeltypeConverter.resource("Dictionary"), model: model, options: requestOptions)
+        } else {
+            zenzaiWorker = nil
+        }
+    }
+
+    /// キャレットの前の文 (Zenzai の文脈に使う) は最後の 40 文字まで (本体が渡すのも 40 文字まで。英単語は字数を使うので長めにする)。
+    static let maxContextLength = 40
+
+    private static func contextTail(_ context: String?) -> String? {
+        guard let context, !context.isEmpty else { return nil }
+        return String(context.suffix(maxContextLength))
     }
 
     /// ひらがな全体に対する変換結果 (入力をすべて使ったものだけ、よい順)。
-    private func results(for hiragana: String, neural: Bool, context: String? = nil, following: String? = nil) -> [Candidate] {
-        // ニューラル変換を使わないときは、文脈で結果が変わらない。
-        let neural = neural && zenzaiWeight != nil
-        let following = passesFollowing ? following : nil
-        let key = neural ? "n\u{1}\(context ?? "")\u{1}\(following ?? "")\u{1}\(hiragana)" : "c\u{1}\(hiragana)"
+    /// Zenzai を使うときは、キャレットの前の文 (context) と、読みのすぐ後ろに続く文字 (following) も文脈としてモデルに渡す
+    /// (同じ読みでも前後の文で変換が変わる)。neural が false なら Zenzai を使わない (候補の一覧用: 速く、候補の種類が多い)。
+    private func results(for hiragana: String, context: String? = nil, following: String? = nil, neural: Bool = true) -> [Candidate] {
+        // Zenzai を使えるとき (止めていない・読みが長すぎない・前の変換が終わっている) だけ、上限付きで Zenzai に頼む
+        let canUseZenzai = neural && zenzaiWorker != nil && hiragana.count <= Self.zenzaiMaxReading
+        let useZenzai = canUseZenzai && Date() >= zenzaiPausedUntil
+        let tail = canUseZenzai ? Self.contextTail(context) : nil
+        let after = canUseZenzai && passesFollowing ? following.flatMap { $0.isEmpty ? nil : $0 } : nil
+        let key = canUseZenzai ? (tail ?? "") + "\u{1}" + (after ?? "") + "\u{1}" + hiragana : hiragana
+        // 止めている間も、Zenzai の答えを控えていればそれを返す (同じ読みを聞き直して azooKey の答えに戻さない)
         if let cached = resultCache[key] { return cached }
         var composing = ComposingText()
         composing.insertAtCursorPosition(hiragana, inputStyle: .direct)
-        // ニューラル変換を使う構成では、converter にはニューラル変換だけを、listConverter には辞書と統計だけの変換を流す。
-        let engine = neural || zenzaiWeight == nil ? converter : listConverter
-        let results = engine.requestCandidates(composing, options: options(neural: neural, context: context, following: following))
+        var results: ConversionResult?
+        if useZenzai, let zenzaiWorker {
+            switch zenzaiWorker.convert(composing, leftContext: tail, rightContext: after, timeout: Self.zenzaiTimeout) {
+            case .done(let zenzai):
+                results = zenzai
+            case .timedOut:
+                zenzaiPausedUntil = Date().addingTimeInterval(Self.zenzaiPause)
+                NSLog("Meltype: Zenzai の変換が %.0f ms で終わらなかったので、5 秒間 Zenzai を使いません", Self.zenzaiTimeout * 1000)
+            case .busy, .notReady:
+                break
+            }
+        }
+        let key2 = results == nil ? hiragana : key
+        if results == nil, let cached = resultCache[key2] { return cached }
+        let converted = results ?? converter.requestCandidates(composing, options: options)
         let count = hiragana.count
         // 入力 (ひらがな) をすべて使った候補だけ (.direct で入れたので、入力の文字数 = ひらがなの文字数)
-        let candidates = results.mainResults.filter { $0.composingCount == .inputCount(count) || $0.composingCount == .surfaceCount(count) }
+        let candidates = converted.mainResults.filter { $0.composingCount == .inputCount(count) || $0.composingCount == .surfaceCount(count) }
         // Keep the engine's previous lattice for incremental conversion; bound retained results.
         if count <= 256 {
             if cacheOrder.count >= 64 {
                 resultCache.removeValue(forKey: cacheOrder.removeFirst())
             }
-            resultCache[key] = candidates
-            cacheOrder.append(key)
+            resultCache[key2] = candidates
+            cacheOrder.append(key2)
         }
         return candidates
     }
@@ -130,7 +165,7 @@ final class MeltypeConverter {
     /// 文節に区切った変換結果 (読みをつなげると元のひらがなになる)。変換できなければ空。
     /// context はキャレットの前の文字、following は読みのすぐ後ろに続く文字 (確定済みの文字か英単語。変換前のかなは来ない)。
     func clauses(for hiragana: String, context: String?, following: String? = nil) -> [(reading: String, text: String)] {
-        guard let best = results(for: hiragana, neural: true, context: context, following: following).first else { return [] }
+        guard let best = results(for: hiragana, context: context, following: following).first else { return [] }
         var clauses: [(reading: String, text: String)] = []
         for element in best.data {
             let reading = MeltypeConverter.hiragana(element.ruby)
@@ -148,14 +183,8 @@ final class MeltypeConverter {
         return clauses
     }
 
-    /// ニューラル変換のモデルを先に読み込んでおく (最初の 1 文字で待たせないため)。
-    func warmUp() {
-        guard zenzaiWeight != nil else { return }
-        _ = clauses(for: "にほんご", context: nil)
-        converter.stopComposition()
-    }
-
-    /// 読みに対する候補の一覧 (重複なし、30 個まで)。
+    /// 読みに対する候補の一覧 (重複なし、30 個まで)。Zenzai は使わない (辞書と統計だけの方が速く、候補の種類が多い。
+    /// 最初の候補 (文の中での変換結果) は本体が clauses の結果を使う)。
     func candidates(for reading: String) -> [String] {
         var seen = Set<String>()
         var list: [String] = []
@@ -164,5 +193,82 @@ final class MeltypeConverter {
             if list.count >= 30 { break }
         }
         return list
+    }
+}
+
+/// Zenzai の変換を、自分の変換エンジンで別のスレッド (直列のキュー) で動かす。
+/// 呼ぶ側は上限の時間だけ待ち、終わらなければ Zenzai なしの変換を使う。終わらなかった変換は裏で最後まで動き、結果は捨てる。
+/// 最初の変換 (モデルの読み込みを含む) は作ったときに裏で済ませ、済むまでは Zenzai を使わない。
+private final class ZenzaiWorker: @unchecked Sendable {
+    enum Outcome {
+        case done(ConversionResult)
+        case timedOut
+        /// 前の変換がまだ動いている (打ち切った後など)
+        case busy
+        /// モデルを読み込み中
+        case notReady
+    }
+
+    private let converter: KanaKanjiConverter
+    private let model: URL
+    private let options: ConvertRequestOptions
+    private let queue = DispatchQueue(label: "Meltype.Zenzai")
+    private let lock = NSLock()
+    private var running = false
+    private var ready = false
+
+    init(dictionaryURL: URL, model: URL, options: ConvertRequestOptions) {
+        converter = KanaKanjiConverter(dicdataStore: DicdataStore(dictionaryURL: dictionaryURL))
+        self.model = model
+        self.options = options
+        queue.async { [self] in
+            var warmup = ComposingText()
+            warmup.insertAtCursorPosition("にほんご", inputStyle: .direct)
+            _ = converter.requestCandidates(warmup, options: zenzaiOptions(leftContext: nil, rightContext: nil))
+            locked { ready = true }
+        }
+    }
+
+    // NSLock.withLock は macOS 14 から (Meltype は macOS 13 から動く) なので自分で書く
+    private func locked<T>(_ body: () -> T) -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return body()
+    }
+
+    /// ニューラル変換の推論の回数の上限。1 回だと速いが精度が落ち、5 回より増やしてもほとんど変わらない
+    /// (AJIMEE-Bench の 1 位の正解率: 使わない 44% / 1 回 67% / 3 回 84% / 5 回 86% / 10 回 86%)。少ないほど時間の上限で打ち切られにくい。
+    private static let inferenceLimit = 5
+
+    private func zenzaiOptions(leftContext: String?, rightContext: String?) -> ConvertRequestOptions {
+        var zenzai = options
+        zenzai.zenzaiMode = .on(weight: model, inferenceLimit: Self.inferenceLimit, personalizationMode: nil,
+                                versionDependentMode: .v3(.init(leftSideContext: leftContext, rightSideContext: rightContext,
+                                                                maxLeftSideContextLength: MeltypeConverter.maxContextLength)))
+        return zenzai
+    }
+
+    func convert(_ composing: ComposingText, leftContext: String?, rightContext: String?, timeout: TimeInterval) -> Outcome {
+        let state: Outcome? = locked {
+            if !ready { return .notReady }
+            if running { return .busy }
+            running = true
+            return nil
+        }
+        if let state { return state }
+        let done = DispatchSemaphore(value: 0)
+        let box = ResultBox()
+        let request = zenzaiOptions(leftContext: leftContext, rightContext: rightContext)
+        queue.async { [self] in
+            box.value = converter.requestCandidates(composing, options: request)
+            locked { running = false }
+            done.signal()
+        }
+        guard done.wait(timeout: .now() + timeout) == .success, let result = box.value else { return .timedOut }
+        return .done(result)
+    }
+
+    private final class ResultBox: @unchecked Sendable {
+        var value: ConversionResult?
     }
 }

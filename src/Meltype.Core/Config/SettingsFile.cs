@@ -1,65 +1,67 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Yukishiro
+// Copyright (C) 2026 aster-void
 
 namespace Meltype.Config;
 
 /// <summary>
-/// config.json を読み、書き換えられたら読み直す。設定の変更を、開いたままの入力欄にもすぐ効かせる
-/// (Mac・Linux。VS Code・Chrome などは入力欄の本体を作り直さないので、作るときに読むだけだとアプリを開き直すまで効かなかった)。
-/// 書き換えを見るのは checkIntervalMs に 1 回まで (キーを打つたびにファイルを調べない)。
-/// 読み直しで読めなかったとき (書いている途中・書き間違い) は、前の設定のまま使う。
+/// config.json の設定。<see cref="Current"/> を読んだとき、前に確かめてから <see cref="CheckIntervalMs"/> 経っていれば
+/// 更新時刻を見て、変わっていれば読み直す (Mac・Linux 版では、設定画面やエディターが入力とは別のプロセスで config.json を書く)。
 /// </summary>
-internal sealed class SettingsFile
+internal sealed class SettingsFile(string path, Action<Settings>? loaded = null, Func<long>? timeMs = null)
 {
-    private readonly string _path;
-    private readonly Func<long> _now;
-    private readonly long _checkIntervalMs;
-    private Settings _current;
-    private DateTime _writeTime;
-    private long _checkedAt;
+    /// <summary>1 打鍵で何度も読むので、更新時刻を見るのはこの間隔 (ミリ秒) に 1 回まで。保存してから効くまで、この分だけ遅れる。</summary>
+    public const long CheckIntervalMs = 1000;
 
-    public SettingsFile(string path, Func<long>? now = null, long checkIntervalMs = 1000)
+    private readonly Func<long> _timeMs = timeMs ?? (() => Environment.TickCount64);
+    private Settings? _settings;
+    private DateTime _writeTime;
+    private long _checkedMs;
+    private bool _failed;
+
+    /// <summary>
+    /// 間隔を待たずに、書き換えられていないかを今調べる (入力欄を作るとき。設定を書き換えた直後に開いた入力欄にも、
+    /// 前の設定が最大 <see cref="CheckIntervalMs"/> 残らないように)。
+    /// </summary>
+    public Settings Refresh()
     {
-        _path = path;
-        _now = now ?? (() => Environment.TickCount64);
-        _checkIntervalMs = checkIntervalMs;
-        _current = Settings.Load(path);
-        _writeTime = WriteTime(path);
-        _checkedAt = _now();
+        _checkedMs = _timeMs() - CheckIntervalMs;
+        return Current;
     }
 
-    public string Path => _path;
-
-    /// <summary>今の設定。ファイルが書き換えられていれば読み直したもの (調べるのは checkIntervalMs に 1 回まで)。</summary>
     public Settings Current
     {
         get
         {
-            var now = _now();
-            return now - _checkedAt < _checkIntervalMs ? _current : Check(now);
-        }
-    }
-
-    /// <summary>間隔を待たずに、書き換えられていないかを今調べる (入力欄を作るとき。書いた直後の設定で作る)。</summary>
-    public Settings Refresh() => Check(_now());
-
-    private Settings Check(long now)
-    {
-        _checkedAt = now;
-        var writeTime = WriteTime(_path);
-        if (writeTime == _writeTime) return _current;
-        if (Settings.TryReload(_path) is { } reloaded)
-        {
-            _current = reloaded;
+            var now = _timeMs();
+            if (_settings is not null && now - _checkedMs < CheckIntervalMs) return _settings;
+            _checkedMs = now;
+            // 読む前の時刻を覚える。読んでいる間に書かれても、次に読み直す (Load の移行で保存したときも 1 回読み直す)
+            var writeTime = File.GetLastWriteTimeUtc(path);
+            var changed = writeTime != _writeTime;
+            // 読み直せなかったときは、更新時刻が変わらなくても (権限を直したなど) 次の間隔でまた読む
+            if (_settings is not null && !changed && !_failed) return _settings;
             _writeTime = writeTime;
-            Diagnostics.Log.Info("config.json が書き換えられたので読み直しました");
+            if (_settings is null) _settings = Settings.Load(path);
+            else
+            {
+                // 読み直しで無い・読めないのは、エディターが書いている途中のことがある (元のファイルを別名に移してから書くエディターもある)。
+                // 既定値に戻さず (.broken も作らず)、前の設定を使い続ける
+                if (!File.Exists(path)) return _settings;
+                try
+                {
+                    _settings = Settings.LoadOrThrow(path);
+                    _failed = false;
+                }
+                catch (Exception ex)
+                {
+                    // 読み直すたびにログを書かないように、書くのは更新時刻が変わったときだけ
+                    if (changed) Diagnostics.Log.Warn($"config.json を読み直せなかったので、前の設定を使い続けます: {ex.Message}");
+                    _failed = true;
+                    return _settings;
+                }
+            }
+            loaded?.Invoke(_settings);
+            return _settings;
         }
-        return _current;
-    }
-
-    private static DateTime WriteTime(string path)
-    {
-        try { return File.Exists(path) ? File.GetLastWriteTimeUtc(path) : default; }
-        catch { return default; }
     }
 }

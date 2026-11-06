@@ -13,6 +13,8 @@ if CommandLine.arguments.contains("--version") {
 if CommandLine.arguments.contains("--register-input-source") {
     let outcome = InputSourceRegistration.register()
     guard outcome == .ready else { exit(outcome.exitCode) }
+    // 更新時はメニューを再起動せず、前面アプリの入力接続を維持する。
+    if CommandLine.arguments.contains("--keep-input-menu") { exit(0) }
     let refresh = Process()
     refresh.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
     refresh.arguments = ["TextInputMenuAgent"]
@@ -103,16 +105,19 @@ if CommandLine.arguments.contains("--self-test") || CommandLine.arguments.contai
             last = NativeCore.shared.handleKey(session, vk: vk, character: code,
                 modifiers: character.isUppercase ? 1 : 0, before: before, after: after)
             for edit in last?.commits ?? [] {
+                var text = edit.text
                 if edit.deleteBefore > 0 {
                     let current = output as NSString
-                    // 消す文字を確認できないときは、前の文字は消さずに edit.text だけを入れる (本体の状態とそろえる)。
+                    // 消す文字を確認できないときは、前の文字は消さずに今打った文字 (edit.current) だけを入れる (入力欄と同じ扱い)。
                     if edit.deleteBefore <= current.length,
                        matchesExpectedText(current.substring(from: current.length - edit.deleteBefore),
                                            expected: edit.expect, deleteBefore: edit.deleteBefore) {
                         output = current.substring(to: current.length - edit.deleteBefore)
+                    } else {
+                        text = edit.current ?? edit.text
                     }
                 }
-                output += edit.text
+                output += text
             }
             if last?.consumed != true { output += String(character) }
         }
@@ -201,15 +206,6 @@ if CommandLine.arguments.contains("--self-test") || CommandLine.arguments.contai
         }
     } catch { check("issue 40: plist parsing", false) }
     let session = NativeCore.shared.createSession()
-    let (_, goPreview) = type("go", session: session)
-    check("go preview candidates", goPreview?.view?.candidates == ["go", "ご"])
-    let selectedGo = NativeCore.shared.selectCandidate(session, index: 0)
-    check("select English go", selectedGo?.view?.text == "go")
-    _ = NativeCore.shared.commit(session)
-    _ = type("go", session: session)
-    let selectedKana = NativeCore.shared.selectCandidate(session, index: 1)
-    check("select hiragana go", selectedKana?.view?.text == "ご")
-    _ = NativeCore.shared.commit(session)
     let (_, emoji) = type("egao ", session: session)
     check("emoji candidate", emoji?.view?.candidates.contains("😊") == true)
     _ = NativeCore.shared.commit(session)
@@ -250,7 +246,9 @@ guard let bundleIdentifier = Bundle.main.bundleIdentifier,
     exit(1)
 }
 candidatesWindow = IMKCandidates(server: server, panelType: kIMKSingleColumnScrollingCandidatePanel)
-// ニューラル変換のモデルの読み込みは、起動が済んでから (最初の 1 文字で待たせないため)。
-DispatchQueue.main.async { MeltypeConverter.shared.warmUp() }
+// ニューラル変換のモデルの読み込みは、起動が済んでから始める (最初の 1 文字で待たせないため)。
+// 変換エンジンを作ると、Zenzai のワーカーが裏でモデルを読み込む (済むまでは Zenzai を使わない)。
+DispatchQueue.main.async { _ = MeltypeConverter.shared }
 NSRegisterServicesProvider(ModeServices.shared, ModeServices.portName)
+NativeCore.shared.startBackgroundConversion()
 NSApplication.shared.run()

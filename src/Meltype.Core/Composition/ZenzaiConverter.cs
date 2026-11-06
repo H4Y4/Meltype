@@ -1,22 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yukishiro
 
+using System.Buffers;
+using System.Globalization;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace Meltype.Composition;
 
 /// <summary>
-/// Zenzai (azooKey のニューラルかな漢字変換モデル zenz) で変換する。モデルは llama.cpp の llama-server を別のプロセスで動かして使う
-/// (どちらも同梱しない。ユーザーが用意した llama-server の実行ファイルと zenz の GGUF ファイルの場所を設定する)。
+/// Zenzai (azooKey のニューラルかな漢字変換モデル zenz) で変換する。モデルは llama.cpp の llama-server を別のプロセスで動かして使う。
 ///
-/// 読み (ひらがな) をカタカナにして、zenz の入力の形 (U+EE00 読み U+EE02 文脈 U+EE01) で llama-server の /completion に頼み、
+/// 読み (ひらがな) をカタカナにして、zenz v3 系の入力の形 (U+EE02 文脈 U+EE00 読み U+EE01) で llama-server の /completion に頼み、
 /// 貪欲に生成した文字列を変換結果にする。サーバーが無い・起動できない・応答しないときは null を返すので、呼び出し側で別の変換エンジンを使う。
-/// 起動はバックグラウンドで行い、準備できるまでの変換は待たずに null を返す (変換は UI スレッドで動く)。
+/// 起動はバックグラウンドで行い、準備できるまでの変換は待たずに null を返す。
 /// 結果は文節に区切らず、読み全体 1 つの文節で返す。
 /// </summary>
 public sealed class ZenzaiConverter : IKanjiConverter, IDisposable
@@ -24,9 +26,13 @@ public sealed class ZenzaiConverter : IKanjiConverter, IDisposable
     private const char InputMark = '';
     private const char OutputMark = '';
     private const char ContextMark = '';
+    private static readonly SearchValues<char> OutputBoundaries = SearchValues.Create("\uEE00\uEE01\uEE02\uEE03\uEE04\uEE05\uEE06\uEE07\uEE08\n");
     private const int StartTimeoutMs = 30000;
     private const int MaxReading = 80;
     private const int MaxContext = 100;
+
+    // ワーカーで待つ時間。入力は止めないので、CPU だけで計算する PC でも答えが届く長さにする (Space で待つのは ConversionBudget の間だけ)
+    private const int DefaultTimeoutMs = 1500;
     private const int MaxCache = 256;
 
     /// <summary>
@@ -38,6 +44,7 @@ public sealed class ZenzaiConverter : IKanjiConverter, IDisposable
 
     private readonly string _serverPath;
     private readonly string _modelPath;
+    private readonly string _device;
     private readonly int _timeoutMs;
     private readonly Uri? _fixedEndpoint;
     private readonly object _gate = new();
@@ -48,25 +55,47 @@ public sealed class ZenzaiConverter : IKanjiConverter, IDisposable
     private Task? _starting;
     private bool _ready;
     private volatile bool _disposed;
-    private int _failures;
+    private volatile int _failures;
+    private volatile bool _hasAnswered;
+    private readonly LatestRequestWorker<LiveRequest> _worker;
+
+    // 打鍵が続く間は最後の読みだけを推論する (CPU のみのときに推論が積み重ならないように)
+    private const int SettleMs = 60;
 
     // 応答が遅かった (CPU の負荷が高いなど) ときは、しばらく使わず今までの変換エンジンに任せる。
-    // ライブ変換は 1 打鍵ごとに UI スレッドで変換を頼むので、遅いままだと入力が止まる
     private const int BackoffMs = 5000;
     private long _pausedUntil;
 
     /// <param name="serverPath">llama-server の実行ファイル。</param>
     /// <param name="modelPath">zenz の GGUF ファイル。</param>
     /// <param name="timeoutMs">1 回の変換を待つ時間。</param>
-    public ZenzaiConverter(string serverPath, string modelPath, int timeoutMs = 400)
+    /// <param name="device">使う GPU (llama-server の --device)。空なら CPU だけで計算する。</param>
+    public ZenzaiConverter(string serverPath, string modelPath, int timeoutMs = DefaultTimeoutMs, string device = "")
     {
         _serverPath = serverPath;
         _modelPath = modelPath;
         _timeoutMs = timeoutMs;
+        _device = device;
+        _worker = new LatestRequestWorker<LiveRequest>(ProcessBackground, SettleMs);
+    }
+
+    /// <summary>
+    /// llama-server に渡す引数 (issue #1307: 使う GPU)。
+    /// 使う GPU が空なら、今までどおり -ngl 0 で CPU だけで計算する (--device none を受け付けない古い llama-server でも動くように)。
+    /// 使う GPU を書いたら --device だけを渡し、GPU に載せる層の数は llama-server に任せる (-ngl の既定は auto で、空いている VRAM に合わせる)。
+    /// </summary>
+    internal static List<string> ServerArguments(string modelPath, int port, string device)
+    {
+        var arguments = new List<string> { "-m", modelPath, "--host", "127.0.0.1", "--port", port.ToString(CultureInfo.InvariantCulture), "-c", "1024", "--parallel", "1",
+            // zenz の前処理 (gpt2-small-japanese-char) は本家の llama.cpp に無く、読み込めない。gpt-2 に差し替えると本家でも動く (#849 で Serugu さんが確かめた)
+            "--override-kv", "tokenizer.ggml.pre=str:gpt-2" };
+        if (device.Trim() is { Length: > 0 } name) arguments.AddRange(["--device", name]);
+        else arguments.AddRange(["-ngl", "0"]);
+        return arguments;
     }
 
     /// <summary>すでに動いている llama-server を使う (テスト用)。</summary>
-    internal ZenzaiConverter(Uri endpoint, int timeoutMs = 400) : this("", "", timeoutMs)
+    internal ZenzaiConverter(Uri endpoint, int timeoutMs = DefaultTimeoutMs) : this("", "", timeoutMs)
     {
         _fixedEndpoint = endpoint;
         _endpoint = endpoint;
@@ -76,14 +105,24 @@ public sealed class ZenzaiConverter : IKanjiConverter, IDisposable
     /// <summary>llama-server と GGUF ファイルが指定の場所にあるか (起動できるかは使ってみるまで分からない)。</summary>
     public bool IsInstalled => _fixedEndpoint is not null || File.Exists(_serverPath) && File.Exists(_modelPath);
 
-    /// <summary>使えるか。何度も失敗したら諦める (毎回起動し直して入力が遅くなるのを避ける)。</summary>
+    /// <summary>使えるか。何度も失敗したら諦める。</summary>
     public bool IsAvailable => IsInstalled && _failures < 3;
 
     /// <summary>何度も失敗して諦めたか (起動しない・答えない)。ファイルは見ない (ZenzaiHolder が変換のたびに見る)。</summary>
     public bool GaveUp => _failures >= 3;
 
+    /// <summary>llama-server が起動して、変換を頼めるか (起動中は false)。</summary>
+    public bool IsReady { get { lock (_gate) return _ready; } }
+
+    /// <summary>応答が遅かったので、しばらく使わずに休んでいるか。</summary>
+    public bool IsResting => Environment.TickCount64 < Interlocked.Read(ref _pausedUntil);
+
     /// <summary>一度でも答えたか (ZenzaiHolder が、使えていたあとの失敗を一時的なものと見るのに使う)。</summary>
-    public bool HasAnswered { get; private set; }
+    public bool HasAnswered => _hasAnswered;
+
+    public ConversionBudget Budget { get; internal set; } = new();
+
+    public event Action? ResultReady;
 
     /// <summary>サーバーの起動をバックグラウンドで始める (入力を始める前に呼ぶ)。</summary>
     public void WarmUp()
@@ -97,6 +136,7 @@ public sealed class ZenzaiConverter : IKanjiConverter, IDisposable
 
     public IReadOnlyList<ConversionClause>? ConvertClauses(string hiragana, string? context = null)
     {
+        ThrowWorkerFailure();
         if (string.IsNullOrEmpty(hiragana) || hiragana.Length > MaxReading || !IsAvailable || Environment.TickCount64 < Interlocked.Read(ref _pausedUntil)) return null;
         context = string.IsNullOrEmpty(context) ? NeutralContext : context.Length > MaxContext ? context[^MaxContext..] : context;
         var key = context + "\u0000" + hiragana;
@@ -106,18 +146,48 @@ public sealed class ZenzaiConverter : IKanjiConverter, IDisposable
             EnsureStarting();
             if (!_ready || _endpoint is null) return null;
         }
+        var request = new LiveRequest(hiragana, context, key);
+        _worker.Submit(request);
+        if (!_worker.Wait(request, Budget.RemainingMs)) return null;
+        ThrowWorkerFailure();
+        lock (_gate) return _cache.TryGetValue(key, out var answered) && answered is not null ? [new ConversionClause(hiragana, answered)] : null;
+    }
+
+    // ワーカーの例外は入力スレッドで投げ直す (HybridConverter が受けて持ち主に知らせる: #973)
+    private Exception? _workerFailure;
+
+    private void ThrowWorkerFailure()
+    {
+        if (Interlocked.Exchange(ref _workerFailure, null) is { } failure) throw new InvalidOperationException("Zenzai の変換で例外になりました", failure);
+    }
+
+    private readonly record struct LiveRequest(string Hiragana, string Context, string Key);
+
+    private void ProcessBackground(LiveRequest request)
+    {
+        try
+        {
+            // 変換しなかった・失敗した答えは知らせない (表示が変わらない。失敗では再描画がまた同じ要求を出す)
+            if (ConvertNow(request.Hiragana, request.Context, request.Key) is not null) ResultReady?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            Volatile.Write(ref _workerFailure, ex);
+        }
+    }
+
+    private IReadOnlyList<ConversionClause>? ConvertNow(string hiragana, string context, string key)
+    {
         var started = Environment.TickCount64;
         var answer = Complete(Prompt(hiragana, context));
         // 読みのまま (変換していない: かんたん → かんたん) の答えは使わない。Mozc などに任せる
-        var text = answer;
-        var unchanged = answer is not null && answer == hiragana;
-        if (unchanged) text = null;
+        var text = answer == hiragana ? null : answer;
         var slow = Environment.TickCount64 - started >= _timeoutMs;
         lock (_gate)
         {
             if (slow) Interlocked.Exchange(ref _pausedUntil, Environment.TickCount64 + BackoffMs);
             if (answer is null && !slow) _failures++;
-            else if (answer is not null) { _failures = 0; HasAnswered = true; }
+            else if (answer is not null) { _failures = 0; _hasAnswered = true; }
             if (_cache.Count >= MaxCache) _cache.Clear();
             // 使わないと決めた答えも覚える (打鍵のたびに聞き直さない)。失敗・遅いときは覚えない
             if (answer is not null && !slow) _cache[key] = text;
@@ -125,13 +195,12 @@ public sealed class ZenzaiConverter : IKanjiConverter, IDisposable
         return text is null ? null : [new ConversionClause(hiragana, text)];
     }
 
-    /// <summary>zenz に渡す文: U+EE00 + カタカナの読み + (文脈があれば U+EE02 + 文脈) + U+EE01。</summary>
+    /// <summary>zenz v3 系に渡す文は、文脈を先に置く。v2 の順序では前の文章が変換結果に混ざることがある。</summary>
     internal static string Prompt(string hiragana, string? context)
     {
         var sb = new StringBuilder();
-        sb.Append(InputMark).Append(ToKatakana(hiragana));
         if (!string.IsNullOrEmpty(context)) sb.Append(ContextMark).Append(context);
-        return sb.Append(OutputMark).ToString();
+        return sb.Append(InputMark).Append(ToKatakana(hiragana)).Append(OutputMark).ToString();
     }
 
     internal static string ToKatakana(string text) =>
@@ -145,7 +214,7 @@ public sealed class ZenzaiConverter : IKanjiConverter, IDisposable
     {
         try
         {
-            var body = JsonSerializer.Serialize(new Dictionary<string, object>
+            var body = new JsonObject
             {
                 ["prompt"] = prompt,
                 ["n_predict"] = 96,
@@ -153,7 +222,7 @@ public sealed class ZenzaiConverter : IKanjiConverter, IDisposable
                 ["top_k"] = 1,
                 ["cache_prompt"] = true,
                 ["parse_special"] = true,
-            });
+            }.ToJsonString();
             using var cts = new CancellationTokenSource(_timeoutMs);
             using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(_endpoint!, "completion"))
             {
@@ -166,7 +235,7 @@ public sealed class ZenzaiConverter : IKanjiConverter, IDisposable
             var content = json.RootElement.TryGetProperty("content", out var c) ? c.GetString() : null;
             return Clean(content);
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException or JsonException or IOException)
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException or JsonException or IOException or ObjectDisposedException)
         {
             return null;
         }
@@ -176,7 +245,7 @@ public sealed class ZenzaiConverter : IKanjiConverter, IDisposable
     internal static string? Clean(string? content)
     {
         if (content is null) return null;
-        var end = content.IndexOfAny(['', '', '', '', '\n']);
+        var end = content.AsSpan().IndexOfAny(OutputBoundaries);
         if (end >= 0) content = content[..end];
         content = content.Replace("</s>", "").Replace("<s>", "").Trim();
         return content.Length == 0 ? null : content;
@@ -200,10 +269,22 @@ public sealed class ZenzaiConverter : IKanjiConverter, IDisposable
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
             };
-            foreach (var argument in new[] { "-m", _modelPath, "--host", "127.0.0.1", "--port", port.ToString(), "-c", "1024", "-ngl", "0", "--parallel", "1",
-                // zenz の前処理 (gpt2-small-japanese-char) は本家の llama.cpp に無く、読み込めない。gpt-2 に差し替えると本家でも動く (#849 で Serugu さんが確かめた)
-                "--override-kv", "tokenizer.ggml.pre=str:gpt-2" })
+            foreach (var argument in ServerArguments(_modelPath, port, _device))
                 info.ArgumentList.Add(argument);
+            // Windows 版の llama.cpp は既定で全物理コアを使い、計算後も 200ms ほど CPU を使用し続ける。ライブ変換では打鍵のたびに変換するため、入力中はこの状態が続く。
+            // そこでスレッド数を 4 までに制限し (zenz は小さいモデルなので、4 より増やしてもほとんど速くならない)、計算後に CPU を使い続ける時間を短くする。どの設定を読むかはビルドにより異なる:
+            // LLVM / Intel の OpenMP でビルドしたもの (本家の Windows の CPU 版) は KMP_BLOCKTIME を読むので、5ms にする。
+            // OpenMP なしのビルドは --poll を読むので、0 にする (--poll は、次の計算が来たかを CPU を使ってループで確かめ続ける長さ。0 にするとループせず、すぐに条件変数で待つ)。
+            // MSVC の OpenMP でビルドしたものはどちらも読まず、スレッド数の制限だけになる (OMP_WAIT_POLICY=PASSIVE なら CPU 時間は減るが、変換が 20ms ほど遅くなる)
+            // LLAMA_ARG_THREADS・KMP_BLOCKTIME が設定されている場合は、その値を優先する (-t は LLAMA_ARG_THREADS より優先されるため付けない)
+            if (!info.Environment.ContainsKey("LLAMA_ARG_THREADS"))
+            {
+                info.ArgumentList.Add("-t");
+                info.ArgumentList.Add(Math.Min(Environment.ProcessorCount, 4).ToString(CultureInfo.InvariantCulture));
+            }
+            info.ArgumentList.Add("--poll");
+            info.ArgumentList.Add("0");
+            info.Environment.TryAdd("KMP_BLOCKTIME", "5");
             KillStaleServer();
             var process = Process.Start(info);
             if (process is null) { Fail(); return; }
@@ -227,6 +308,7 @@ public sealed class ZenzaiConverter : IKanjiConverter, IDisposable
                 if (Ping(endpoint))
                 {
                     lock (_gate) { _endpoint = endpoint; _ready = true; }
+                    ResultReady?.Invoke();
                     return;
                 }
                 Thread.Sleep(200);
@@ -282,7 +364,7 @@ public sealed class ZenzaiConverter : IKanjiConverter, IDisposable
     /// 前の Meltype が強制終了されて残った llama-server (PID ファイルに書いてあるもの) を終わらせる。
     /// PID は使い回されるので、名前に加えて起動した時刻も同じときだけ (ユーザーが自分で動かしている別の llama-server を止めないように)。
     /// </summary>
-    private void KillStaleServer()
+    private static void KillStaleServer()
     {
         try
         {
@@ -376,6 +458,7 @@ public sealed class ZenzaiConverter : IKanjiConverter, IDisposable
 
     public void Dispose()
     {
+        _worker.Dispose();
         Process? process;
         lock (_gate)
         {

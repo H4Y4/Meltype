@@ -23,18 +23,22 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
     private readonly Func<double> _opacity;
     private readonly Func<(string Japanese, string Direct, string Text)> _indicatorColors;
     private readonly Func<bool> _directMode;
+    // Microsoft IME と Windows の候補は、応答に上限が無い (WinRT は最大 500ms 待つ) ので入力スレッドで呼ばない。_sta のスレッドからだけ使う
+    private readonly StaThread _sta = new("Meltype Microsoft IME");
     private readonly MsImeKanjiConverter _converter = new();
     private readonly KeyInjector _injector = new();
     private readonly WinRtCandidates _windowsCandidates = new();
+    private BackgroundCallbackConverter _system = null!;
+    // 「なう」の候補に出す再生中の曲 (issue #1400)
+    private readonly NowPlaying _nowPlaying;
     // Mozc (同梱の mozc/meltype_mozc_helper.exe) と Microsoft IME を組み合わせた変換エンジン。
     private readonly MozcConverter _mozc = new(Path.Combine(AppContext.BaseDirectory, "mozc", "meltype_mozc_helper.exe"), Path.Combine(Config.AppPaths.DataDirectory, "mozc"));
     private HybridConverter _hybrid = null!;
 
-    // Zenzai (llama-server + zenz の GGUF)。設定で ON のときだけ、指定の場所が変わるたびに作り直す (持ち主は ZenzaiHolder)
+    // Zenzai (llama-server + zenz の GGUF。場所が空なら同梱のもの)。設定で ON のときだけ、指定の場所・GPU の設定が変わるたびに作り直す (持ち主は ZenzaiHolder)
     private readonly ZenzaiHolder _zenzai = new();
     private ZenzaiConverter? CurrentZenzai(CompositionOptions options) =>
-        options.UseZenzai() ? _zenzai.Get(options.ZenzaiServerPath(), options.ZenzaiModelPath()) : _zenzai.Get("", "");
-    private readonly IME.Imm32ImeController _imm32 = new();
+        options.UseZenzai() ? _zenzai.Get(ZenzaiBundle.ServerPath(options.ZenzaiServerPath()), ZenzaiBundle.ModelPath(options.ZenzaiModelPath()), options.ZenzaiDevice()) : _zenzai.Get("", "");
     private readonly System.Windows.Forms.Timer _tick = new() { Interval = 100 };
     private int _pumpScheduled;
 
@@ -42,6 +46,7 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
     public CompositionService(Control invoker, CompositionDetector detector, CompositionOptions options)
     {
         _invoker = invoker;
+        _nowPlaying = new NowPlaying(options.NowPlayingCandidates);
         Gate = new CaptureGate(SchedulePump);
         // 補助辞書・文脈の手がかり・学習データは、指定がなければ既定の場所から読む。
         var userDirectory = Config.AppPaths.UserDictionaryDirectory;
@@ -62,8 +67,10 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
             UserDictionary = UserDictionary,
             MoreCandidates = options.MoreCandidates ?? (reading => _hybrid.Candidates(reading)),
             AutoCorrect = options.AutoCorrect,
-            Level = options.Level,
+            Manual = options.Manual,
             KanaInput = options.KanaInput,
+            KanaLayout = options.KanaLayout,
+            RomajiLayout = options.RomajiLayout,
             Misspellings = options.Misspellings ?? MisspellingDictionary.Load(userDirectory),
             Languages = Languages,
             Translations = options.Translations ?? TranslationDictionary.Load(),
@@ -79,7 +86,7 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
             Meanings = options.Meanings ?? MeaningDictionary.Load(),
             RomajiTypos = options.RomajiTypos ?? RomajiTypoCorrector.Load(detector.Romaji),
             CorrectTypos = options.CorrectTypos,
-            SlashAsMiddleDot = options.SlashAsMiddleDot,
+            Slash = options.Slash,
             FullWidthSymbols = options.FullWidthSymbols,
             HalfWidthSymbols = options.HalfWidthSymbols,
             LongVowelOnlyAfterKana = options.LongVowelOnlyAfterKana,
@@ -89,32 +96,29 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
             SpaceAroundEnglish = options.SpaceAroundEnglish,
             SpaceAroundNumbers = options.SpaceAroundNumbers,
             NumberKeysSelectCandidates = options.NumberKeysSelectCandidates,
-            ShiftSpaceHalfWidth = options.ShiftSpaceHalfWidth,
+            SpaceWidth = options.SpaceWidth,
             EnterCommitsAsShown = options.EnterCommitsAsShown,
             AlphanumericKeyStartsAsTyped = options.AlphanumericKeyStartsAsTyped,
             FullWidthParentheses = options.FullWidthParentheses,
-            FullWidthSlash = options.FullWidthSlash,
             SquareBrackets = options.SquareBrackets,
             EscStepsBack = options.EscStepsBack,
             EscRevertsSelectedClause = options.EscRevertsSelectedClause,
             FunctionKeysAffectSelectedClause = options.FunctionKeysAffectSelectedClause,
-            CompatibleShortcuts = options.CompatibleShortcuts,
+            ControlKeys = options.ControlKeys,
             PartialCommit = options.PartialCommit,
-            MacControlKeys = options.MacControlKeys,
             CursorIntoBrackets = options.CursorIntoBrackets,
             ControlKeyBindings = options.ControlKeyBindings,
             CalculatorCandidates = options.CalculatorCandidates,
-            LogKeyIntervals = options.LogKeyIntervals,
             LaughterAfterKana = options.LaughterAfterKana,
             ContextualLearning = options.ContextualLearning,
-            FullWidthSpaceByDefault = options.FullWidthSpaceByDefault,
             ShowCandidatesWhileTyping = options.ShowCandidatesWhileTyping,
             GitHubIssueCandidates = options.GitHubIssueCandidates,
             GitHubRepository = options.GitHubRepository,
             GitHubTitles = options.GitHubTitles,
             ClipboardCandidates = options.ClipboardCandidates,
+            NowPlayingCandidates = options.NowPlayingCandidates,
+            ClockTimeZone = options.ClockTimeZone,
             Punctuation = options.Punctuation,
-            ControlKeys = options.ControlKeys,
             TranslationHistory = options.TranslationHistory ?? new TranslationHistory(Config.AppPaths.TranslationHistoryFile),
             Predictor = options.Predictor ?? new Predictor(new PhraseHistory(Config.AppPaths.PhraseHistoryFile), UserDictionary, History),
             Predictions = options.Predictions,
@@ -122,10 +126,18 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
         };
         Phrases = resolved.Predictor?.Phrases;
         TranslationHistory = resolved.TranslationHistory;
-        _hybrid = new HybridConverter(options.Engine, _mozc, _converter, reading => _windowsCandidates.Get(reading), () => CurrentZenzai(options), _zenzai.Failed);
+        _mozc.Budget.Enable();
+        _system = new BackgroundCallbackConverter(_converter.ConvertClauses, reading => _windowsCandidates.Get(reading), _converter.Convert, _mozc.Budget, _sta.Post);
+        _hybrid = new HybridConverter(options.Engine, _mozc, _system, _system.Candidates, () => CurrentZenzai(options), _zenzai.Failed);
         _resolved = resolved;
         Controller = new CompositionController(Gate, detector, _hybrid, this, resolved);
-        Controller.Corrected += Corrections.Add;
+        _hybrid.ResultReady += () =>
+        {
+            if (_invoker.IsHandleCreated && !_invoker.IsDisposed) _invoker.BeginInvoke(() => Safely(() => Controller.RefreshConversion()));
+            ConversionReady?.Invoke();
+        };
+        // 直したときの「Zenzai を使う」も覚えておく (報告を開くまでに設定を変えても、直したときの設定で報告する。issue #1197)
+        Controller.Corrected += correction => Corrections.Add(correction with { Zenzai = options.UseZenzai() });
         if (options.Engine() != Config.ConversionEngine.System && _mozc.IsInstalled) _mozc.WarmUp();
         _showIndicator = options.ModeIndicator;
         _placement = options.Placement;
@@ -165,6 +177,9 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
         }, settings, directModeDetection);
 
     public CompositionController Controller { get; }
+
+    /// <summary>背景の変換の結果が届いた (Meltype IME の入力欄に知らせる)。ワーカーのスレッドで呼ぶ。</summary>
+    public event Action? ConversionReady;
 
     /// <summary>入力言語による制限。フックで保留した後・タイマーで判定する前にも確かめる。</summary>
     public Func<bool> InputAllowed { get; set; } = () => true;
@@ -207,7 +222,7 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
         if (word.All(c => KanaChars.IsHiraganaOrLongMark(c) || KanaChars.IsKatakana(c))) return KanaChars.ToHiragana(word);
         try
         {
-            return _converter.Reading(word) ?? "";
+            return _sta.Invoke(() => _converter.Reading(word)) ?? "";
         }
         catch (Exception ex)
         {
@@ -221,8 +236,8 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
     {
         var list = new List<string>();
         void Add(string? word) { if (!string.IsNullOrEmpty(word) && !list.Contains(word)) list.Add(word); }
-        Add(_converter.Convert(reading));
-        foreach (var word in _windowsCandidates.Get(reading, 30)) Add(word);
+        Add(_sta.Invoke(() => _converter.Convert(reading)));
+        foreach (var word in _sta.Invoke(() => _windowsCandidates.Get(reading, 30))) Add(word);
         Add(CompositionText.ToKatakana(reading));
         return list;
     }
@@ -359,7 +374,7 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
     /// <summary>入力欄にフォーカスが移ったときに、次に打つキーのモード (あ / A) を出す (フォーカスを調べるスレッドから呼ばれる)。null なら英数 / 日本語 をそのまま出す。</summary>
     public Action? ShowModeOnFocus { get; set; }
 
-    /// <summary>前面のアプリで、確定した文字を貼り付けで入れるか (設定の「貼り付けで入力するアプリ」)。</summary>
+    /// <summary>前面のアプリで、確定した文字を貼り付けで入れるか (アプリ別設定の「確定した文字の入れ方」)。</summary>
     public Func<bool> PasteCommit { get; set; } = () => false;
 
     public void CommitText(string text)
@@ -492,9 +507,9 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
         {
             if (!InputAllowed()) return;
             if (IME.ImeTarget.FromForeground() is not { } target) return;
-            var state = _imm32.GetState(target);
+            var state = IME.Imm32ImeController.GetState(target);
             if (state.Mode != IME.ImeMode.Open) return;
-            var closed = _imm32.TrySetOpen(target, false, null, 150);
+            var closed = IME.Imm32ImeController.TrySetOpen(target, false, null, 150);
             Diagnostics.Log.Warn($"確定時に Microsoft IME が ON になっていました ({state}) → {(closed ? "OFF にしてから入力します" : "OFF にできませんでした")}。");
         }
         catch (Exception ex)
@@ -634,20 +649,33 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
     /// 入力モード (日本語なら「あ」、英数なら「A」) をカーソルの近くに一瞬出す。どのスレッドから呼んでもよい。
     /// 変換ボックスが出ているときは出さない。
     /// </summary>
-    public void ShowMode(bool japanese)
+    public void ShowMode(bool japanese, uint inputThread = 0, Point? inputAnchor = null)
     {
         if (!_invoker.IsHandleCreated || _invoker.IsDisposed) return;
         _invoker.BeginInvoke(() => Safely(() =>
         {
             if (!_showIndicator() || _window.Visible) return;
-            var anchor = FindAnchor();
+            // TSF の通知が届くまでに別の入力先へ移っていたら表示しない。
+            if (inputThread != 0 && IME.ImeTarget.FromForeground()?.ThreadId != inputThread) return;
+            var anchor = inputAnchor ?? (inputThread == 0 ? FindAnchor() : FindImeIndicatorAnchor());
             var (jp, direct, text) = _indicatorColors();
             _indicator.SetColors(Config.Settings.ParseColor(jp), Config.Settings.ParseColor(direct), Config.Settings.ParseColor(text));
             _indicator.Flash(japanese, new Point(anchor.X + 2, anchor.Y + 2));
         }));
     }
 
+    private Point FindImeIndicatorAnchor()
+    {
+        if (FindCaret() is { } caret) return new Point(caret.Left, caret.Bottom + 4);
+        // 空の入力欄とは限らないため、入力欄の左上をキャレット位置と推測しない。
+        Native.GetCursorPos(out var cursor);
+        return new Point(cursor.X + 12, cursor.Y + 20);
+    }
+
     public bool IsShiftDown() => (Native.GetAsyncKeyState(VirtualKeys.Shift) & 0x8000) != 0;
+
+    /// <summary>今再生している曲 (曲が変わったときに裏で読んだもの。保存しない・送らない)。</summary>
+    public (string Title, string Artist)? NowPlaying => _nowPlaying.Read();
 
     /// <summary>クリップボードの文字 (変換した瞬間に 1 回だけ読む)。履歴に残さない印のある内容 (パスワード管理ソフトなど) は読まない。</summary>
     public string? ClipboardText
@@ -672,6 +700,11 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
 
     /// <summary>変換ボックスを出したまま確定した文字 (次に見せるときに、その幅だけ変換ボックスを右へずらす)。</summary>
     private string _committedWhileVisible = "";
+
+    /// <summary>Zenzai の今の状態 (トレイのメニューに出す)。OFF なら null。</summary>
+    public string? ZenzaiStatus(bool useZenzai, string serverPath, string modelPath) =>
+        !useZenzai ? null
+        : _zenzai.Status ?? "まだ起動していません (日本語を変換すると起動します)";
 
     public void Show(CompositionView view)
     {
@@ -708,6 +741,13 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
         _committedWhileVisible = "";
         _beside = BesideSearch.None;
         var caret = FindCaret();
+        // どのモニターにも入らない入力位置 (フォーカスを失った窓の -32000 など) は、分からないものとして扱う。
+        // そのまま使うと、そこから決めた拡大率・文字の大きさ・位置で、変換ボックスが画面の外や画面より大きく出て見えなくなった (issue #1138)
+        if (caret is { } outside && !Screen.AllScreens.Any(screen => screen.Bounds.Contains(outside.Location)))
+        {
+            Diagnostics.Log.Info($"変換ボックスを出す入力位置がどのモニターにも入らないので、分からないものとして扱います: {outside.X},{outside.Y} 高さ {outside.Height}");
+            caret = null;
+        }
         // 入力欄が空のとき、アプリによっては入力位置ではなく入力欄の枠 (40px の欄など) や、複数行の欄全体の四角形が返る。
         // 枠と同じ高さなら、文字の高さは枠のおよそ半分 (1 行の欄の文字は上下の真ん中にある)。高すぎる四角形は、文字の高さが分からない。
         var element = Focus.Current.Bounds;
@@ -831,7 +871,7 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
 
     private static bool IsShellSearchWindow(IntPtr hwnd)
     {
-        Native.GetWindowThreadProcessId(hwnd, out var processId);
+        if (Native.GetWindowThreadProcessId(hwnd, out var processId) == 0) return false;
         try
         {
             using var process = System.Diagnostics.Process.GetProcessById((int)processId);
@@ -932,8 +972,15 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
     {
         _tick.Dispose();
         Focus.Dispose();
-        _converter.Dispose();
-        _windowsCandidates.Dispose();
+        _system.Dispose();
+        _sta.Invoke(() =>
+        {
+            _converter.Dispose();
+            _windowsCandidates.Dispose();
+            return true;
+        });
+        _sta.Dispose();
+        _nowPlaying.Dispose();
         _mozc.Dispose();
         _zenzai.Dispose();
         _window.Dispose();

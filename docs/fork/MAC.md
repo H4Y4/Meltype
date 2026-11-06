@@ -1,0 +1,55 @@
+# Mac 版: この fork (H4Y4/Meltype) で足したもの
+
+本家の Mac 版の使い方は [docs/MACOS.md](../MACOS.md)、ビルドは [mac/README.md](../../mac/README.md)。
+ここには、この fork だけにある操作と設定を書きます (本家へは 1 件ずつ提案する予定: [UPSTREAM_PLAN.md](UPSTREAM_PLAN.md))。
+
+## キー操作
+
+| キー | |
+|---|---|
+| <kbd>F6</kbd> / <kbd>F7</kbd> / <kbd>F8</kbd> | ひらがな / カタカナ / 半角カタカナ (F8 は全角の記号・英数字・空白も半角にします) |
+| <kbd>F9</kbd> / <kbd>F10</kbd> | 全角英数 / 半角英数 |
+| <kbd>英数</kbd> / <kbd>かな</kbd> | JIS キーボードで、英数 (直接入力) / 日本語に戻る |
+
+- 変換中に Shift+↓ / PageDown で候補を次のページ (9 個ずつ)、Shift+↑ / PageUp で前のページへ (Shift+↑↓ のページ送りは Mac だけです)。1 ページに収まるときは動きません。1〜9 でそのページの候補を選べます
+- `zh` `zj` `zk` `zl` で ← ↓ ↑ → (macOS 標準の日本語入力と同じ。小文字の h j k l だけ。ローマ字として読めなかった英字の後ろ (英単語の途中) と、ユーザーのローマ字の表に同じ綴りがあるときは矢印にしません)
+- 確定済みの文字 (漢字・かな、128 文字まで) を選択して Control+Shift+R で再変換 (Enter で確定、Esc で元の文字に戻る。英数字・記号を含む選択、書式付きの文字、ターミナルなど選択範囲を置き換えられないアプリでは再変換せず、キーはアプリにそのまま渡ります)
+- 「英数」「かな」キーが無い US 配列などでは、Control+Shift+J で日本語、Control+Shift+; (または ') で英数に切り替えられます (変換中の文字は確定してから英数になります)
+
+## 入力中の Ctrl キー (macOS 風)
+
+`config.json` の `"ControlKeys": "Mac"` (本家の設定「Control キーの割り当て」の「macOS 風」) で、入力中の Ctrl キーを macOS の日本語入力と同じにします。
+この fork では、本家の macOS 風の割り当ての代わりに次の表を使います (Meltype IME (Windows) でも同じに効きます)。
+
+- Ctrl+J ひらがな / Ctrl+K カタカナ / Ctrl+L 全角英字 / Ctrl+; ・Ctrl+: ・Ctrl+' 半角英字
+- Ctrl+N 次の候補 / Ctrl+P 前の候補 / Ctrl+F 次の文節 / Ctrl+B 前の文節 / Ctrl+W・Ctrl+O 文節を伸ばす / Ctrl+I 縮める / Ctrl+V 次のページ・Ctrl+R 前のページ (ページ送りは変換中だけ) / Ctrl+M 確定 / Ctrl+H BackSpace
+- 英字だけを打っている間の Ctrl+N などと、入力が空のときの Ctrl+キーは、アプリにそのまま渡します
+- 本家の Ctrl+D (後ろの 1 文字を消す)・Ctrl+A / E (先頭・末尾へ) は、変換中の文字の中でそれを受け取る処理がまだ無いので割り当てていません
+
+前の版の fork の `"ControlKeys": "Mac"` / `"Atok"` は、読み込むときにそのまま「macOS 風」/「標準」として読みます。
+
+## 記号・スペースの設定 (config.json)
+
+- `"FullWidthSymbols"` (いつも全角にする記号) と `"HalfWidthSymbols"` (いつも半角にする記号) に記号を並べて書きます。たとえば `"FullWidthSymbols": "()"` で括弧が全角の（ ）に、`"HalfWidthSymbols": "<>"` で `<` `>` が日本語の中でも半角になります (`-` `,` `.` `/` は対象外。URL・パスの中の括弧は書いてあっても半角のまま)
+- `"LongVowelOnlyAfterKana": true` で、`-` を長音の「ー」にするのはかなのすぐ後ろ (らーめん) だけになります
+- `"SpaceCommitsSymbols": true` で、幅を決めた記号だけを打って Space を押すと、候補を開かずに確定して空白を入れます。Markdown の記号 (`#` `-` `*` `+` `>`) だけのときは、この設定に関係なく打った半角 + 空白で確定します (本家の動作)
+- `"YenKey": "Backslash"` で、¥ キー・`\` キーが半角の `\` を入れます
+- `"LatinKeyboardLayout"` に入力ソースの ID (`"com.apple.keylayout.ABC"` など) を書くと、キーを文字にするのに使う英字の配列を決められます (macOS の日本語入力の「英字のレイアウト」と同じ)
+- 書き換えると、開いたままの入力欄にも 1 秒ほどで効きます (入力欄を新しく選んだときはすぐに効きます)
+
+## 設定の書き出し・読み込み
+
+入力メニューの「設定を書き出す…」で `*.meltype-profile.json` にして、もう一方 (Windows・別の Mac) で「設定を読み込む…」を選びます。読み込んだ設定は新しいプロファイルになり、前の設定も残ります。
+ターミナルからは `~/Library/Input\ Methods/Meltype.app/Contents/MacOS/Meltype --export-settings <ファイル>` / `--import-settings <ファイル>` でもできます。
+
+## ニューラル変換 (Zenzai) の前後の文脈
+
+本家の Mac 版の Zenzai (azooKey の Zenzai) に、この fork では次を足しています。
+
+- 前の文字: 入力欄の確定済みの文字 (前の文も含めて 40 文字まで、行の頭まで) と、同じ入力の中で前にある英単語 (`meltype` + のへんかんせいど → の変換精度)
+- 後ろの文字: 入力欄のキャレットの後ろの確定済みの文字 (20 文字まで、行の終わりまで) と、同じ入力の中で後ろに続く英単語 (きどうを + `debug` → 起動を)。モデルが zenz-v3.2 のときだけ渡します
+- 手がかり辞書 (contexts.txt) は控えめに使い、選び直して覚えた変換を先にします (前方一致で かわりに → 革りに などにしない)
+- 推論の上限は 5 回 (10 回と精度が変わらず速い。AJIMEE-Bench の 1 位の正解率: 使わない 44% / 5 回 86% / 10 回 86%)
+- 候補の一覧 (Space を押したあと) は、辞書と統計から作ります (速く、候補の種類が多い)
+- 止めるときは、本家と同じく `config.json` の `"UseZenzai": false` (Meltype を起動し直すと反映)。前の版の fork の `defaults write … DisableNeuralConversion` は使わなくなりました
+- ログを ON にすると、確定のたびに渡した文脈の長さ (「変換エンジンに渡した文脈: 前 12 文字、後ろ 0 文字」) が残ります

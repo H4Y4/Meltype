@@ -16,7 +16,7 @@ namespace Meltype.Mac;
 ///
 /// 文字列はすべて UTF-8 の NUL 終端。こちらが返す文字列は meltype_free で解放する。
 /// Swift 側が登録する関数 (漢字変換・候補・英単語の判定) が返す文字列は malloc したもので、こちらで free する。
-/// Input Method Kit はメインスレッドから呼ぶので、排他はしない。
+/// Input Method Kit はメインスレッドから呼ぶので、排他はしない。漢字変換・候補の関数はワーカーのスレッドから呼ぶ (BackgroundCallbackConverter)。
 /// </summary>
 public static unsafe class Exports
 {
@@ -52,6 +52,7 @@ public static unsafe class Exports
             if (string.IsNullOrEmpty(path)) return 0;
             s_mozc?.Dispose();
             s_mozc = new MozcConverter(path, FromUtf8(profile) ?? Path.Combine(Config.AppPaths.DataDirectory, "mozc"));
+            s_converter = new HybridConverter(() => Config.ConversionEngine.Mozc, s_mozc, null, null);
             if (!s_mozc.IsInstalled) return 0;
             s_mozc.WarmUp();
             return 1;
@@ -72,15 +73,85 @@ public static unsafe class Exports
     {
         try
         {
-            var session = s_mozc is { } mozc
-                ? MeltypeSession.CreateDefault(mozc, mozc.Candidates, s_isWord == null ? null : new CallbackWordChecker())
-                : MeltypeSession.CreateDefault(new CallbackConverter(), MoreCandidates, s_isWord == null ? null : new CallbackWordChecker(), autoSpacing: true, shiftArrowPaging: true);
+            var wordChecker = s_isWord == null ? null : new CallbackWordChecker();
+            // Mac 版で Zenzai を使うときは、前後の文脈を読む変換エンジンとして渡す (MacConverter)。Linux 版 (Mozc) と、Zenzai を止めた Mac 版は HybridConverter
+            var session = s_mozc is null
+                ? MeltypeSession.CreateDefault(UsesZenzai() ? s_mac : s_converter, s_converter.Candidates, wordChecker, autoSpacing: true, shiftArrowPaging: true)
+                : MeltypeSession.CreateDefault(s_converter, s_converter.Candidates, wordChecker);
             return GCHandle.ToIntPtr(GCHandle.Alloc(session));
         }
         catch (Exception ex)
         {
             Diagnostics.Log.Error($"Mac: 初期化できませんでした: {ex}");
             return IntPtr.Zero;
+        }
+    }
+
+    /// <summary>
+    /// 変換エンジンを入力のスレッドで待たず、結果が届いたら notify を呼ぶ。meltype_init / meltype_init_mozc の後、meltype_create の前に 1 回呼ぶ。
+    /// notify はワーカーのスレッドで呼ばれるので、フロントはメインループに移してから、フォーカスのある入力欄に meltype_refresh を呼ぶ。
+    /// 呼ばないフロント (古いフロント・--self-test) では、結果を反映する経路が無いので、答えが出るまで待つ。
+    /// </summary>
+    [UnmanagedCallersOnly(EntryPoint = "meltype_set_conversion_ready")]
+    public static void SetConversionReady(delegate* unmanaged<void> notify)
+    {
+        try
+        {
+            s_converter.Budget.Enable();
+            s_converter.ResultReady += () => notify();
+            if (s_mozc is null) s_callback.WarmUp();
+        }
+        catch (Exception ex)
+        {
+            Diagnostics.Log.Error($"変換の結果の通知を登録できませんでした: {ex}");
+        }
+    }
+
+    /// <summary>登録された関数で変換するとき (Mac 版)。入力欄がいくつあっても 1 つ (登録された関数を 1 つのワーカーからだけ呼ぶ)。</summary>
+    private static readonly BackgroundCallbackConverter s_callback = CreateCallbackConverter();
+
+    private static BackgroundCallbackConverter CreateCallbackConverter()
+    {
+        var callback = new CallbackConverter();
+        return new(callback.ConvertClauses, MoreCandidates, clausesWithFollowing: callback.ConvertClauses);
+    }
+
+    /// <summary>Mac 版で Zenzai を使うときの、入力欄の変換エンジン (s_callback を前後の文脈を読む変換エンジンとして渡す)。</summary>
+    private static readonly MacConverter s_mac = new(s_callback);
+
+    /// <summary>
+    /// 設定「Zenzai を使う」(Mac 版は azooKey の Zenzai)。読めないときは使わない (meltype_zenzai_model と同じ)。
+    /// Swift 側はこの設定で Zenzai を使うかを決める (起動したときに 1 回。変えたら Meltype を起動し直す)。
+    /// </summary>
+    private static bool UsesZenzai()
+    {
+        try
+        {
+            return Config.Settings.Load(Config.AppPaths.ConfigFile).UseZenzai;
+        }
+        catch (Exception ex)
+        {
+            Diagnostics.Log.Error($"Zenzai の設定を読めませんでした: {ex}");
+            return false;
+        }
+    }
+
+    /// <summary>入力欄が使う変換エンジン。Windows 版と同じ HybridConverter で、Mac 版は登録された関数だけ、Linux 版は Mozc だけを組み合わせる。</summary>
+    private static HybridConverter s_converter = new(() => Config.ConversionEngine.System, null, s_callback, s_callback.Candidates);
+
+    /// <summary>入力中の表示を、届いた変換結果で作り直して JSON で返す。入力中でなければ NULL。</summary>
+    [UnmanagedCallersOnly(EntryPoint = "meltype_refresh")]
+    public static byte* Refresh(IntPtr handle)
+    {
+        try
+        {
+            if (handle == IntPtr.Zero || GCHandle.FromIntPtr(handle).Target is not MeltypeSession session) return null;
+            return session.RefreshConversion() is { } result ? ToUtf8(result.ToJson()) : null;
+        }
+        catch (Exception ex)
+        {
+            Diagnostics.Log.Error($"入力の処理で例外: {ex}");
+            return null;
         }
     }
 
@@ -174,6 +245,23 @@ public static unsafe class Exports
     public static void SetDirect(IntPtr handle, int direct)
     {
         if (handle != IntPtr.Zero && GCHandle.FromIntPtr(handle).Target is MeltypeSession session) session.Direct = direct != 0;
+    }
+
+    /// <summary>
+    /// 直前のキーが、設定「入力モード切り替えキー」の切替として使われたか (1 / 0)。読むと印が消える (#1033)。
+    /// Mac・Linux のフロントエンドは、これと <c>meltype_is_direct</c> で、自分のモード (A / あ、入力メニュー) を本体に合わせる。
+    /// </summary>
+    [UnmanagedCallersOnly(EntryPoint = "meltype_take_mode_toggled")]
+    public static int TakeToggled(IntPtr handle)
+    {
+        return handle != IntPtr.Zero && GCHandle.FromIntPtr(handle).Target is MeltypeSession session && session.TakeToggled() ? 1 : 0;
+    }
+
+    /// <summary>本体のモード (1 = 英数 / 直接入力、0 = 日本語)。切り替えたあとにフロントエンドが読む (#1033)。</summary>
+    [UnmanagedCallersOnly(EntryPoint = "meltype_is_direct")]
+    public static int IsDirect(IntPtr handle)
+    {
+        return handle != IntPtr.Zero && GCHandle.FromIntPtr(handle).Target is MeltypeSession session && session.Direct ? 1 : 0;
     }
 
     [UnmanagedCallersOnly(EntryPoint = "meltype_set_code_input")]
@@ -299,6 +387,26 @@ public static unsafe class Exports
         }
     }
 
+    /// <summary>
+    /// Zenzai の設定 (Mac 版。issue #1130)。「Zenzai を使う」が OFF なら NULL、ON なら設定のモデルの場所
+    /// (空文字列なら Meltype.app に同梱のモデルを使う)。meltype_free で解放する。
+    /// </summary>
+    [UnmanagedCallersOnly(EntryPoint = "meltype_zenzai_model")]
+    public static byte* ZenzaiModel()
+    {
+        try
+        {
+            var settings = Config.Settings.Load(Config.AppPaths.ConfigFile);
+            return settings.UseZenzai ? ToUtf8(settings.ZenzaiModelPath.Trim()) : null;
+        }
+        catch (Exception ex)
+        {
+            // 読めないときは使わない (打鍵のたびに推論が走るので、分からないまま ON にしない)
+            Diagnostics.Log.Error($"Zenzai の設定を読めませんでした。Zenzai を使わずに変換します: {ex}");
+            return null;
+        }
+    }
+
     /// <summary>Meltype.Core の版 (csproj の Version)。meltype_free で解放する。</summary>
     [UnmanagedCallersOnly(EntryPoint = "meltype_version")]
     public static byte* Version() => ToUtf8(Config.ProjectInfo.CoreVersion);
@@ -340,7 +448,7 @@ public static unsafe class Exports
         }
     }
 
-    private static IReadOnlyList<string> MoreCandidates(string reading)
+    private static string[] MoreCandidates(string reading)
     {
         if (s_candidates == null) return [];
         var text = TakeUtf8(s_candidates(ToUtf8(reading, out var buffer)));
@@ -382,6 +490,29 @@ public static unsafe class Exports
                 if (followingPointer != null) NativeMemory.Free(followingPointer);
             }
         }
+    }
+
+    /// <summary>
+    /// Mac 版の Zenzai (azooKey) を、前後の文脈を読むニューラルの変換エンジン (IContextAwareConverter) として本体に渡す。
+    /// 本体は、手がかり辞書を控えめに使い、学習を先にし、前の文の文脈と後ろの文脈 (確定済みの文字・後ろの英単語) も渡す。
+    /// 変換はワーカー (BackgroundCallbackConverter) を通すので、入力のスレッドは待たない。
+    /// </summary>
+    private sealed class MacConverter(BackgroundCallbackConverter worker) : IKanjiConverter, IContextAwareConverter, IBackgroundConverter
+    {
+        public ConversionBudget Budget => worker.Budget;
+
+        public event Action? ResultReady
+        {
+            add => worker.ResultReady += value;
+            remove => worker.ResultReady -= value;
+        }
+
+        public string? Convert(string hiragana) => worker.Convert(hiragana);
+
+        public IReadOnlyList<ConversionClause>? ConvertClauses(string hiragana, string? context = null) => worker.ConvertClauses(hiragana, context);
+
+        public IReadOnlyList<ConversionClause>? ConvertClauses(string hiragana, string? context, string? following) =>
+            worker.ConvertClauses(hiragana, context, following);
     }
 
     private sealed class CallbackWordChecker : IWordChecker
