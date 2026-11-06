@@ -63,7 +63,7 @@ Meltype のソースコード (このリポジトリ) には、次のものを�
 
 ### 候補の意味 (dictionaries/meanings.txt)
 
-変換中に候補で止まったとき、その候補の日本語の意味を出すのに使います。[ウィクショナリー日本語版](https://ja.wiktionary.org/) の記事から [kaikki.org](https://kaikki.org/jawiktionary/) (wiktextract、Tatu Ylonen) が取り出したデータを元に、英訳の候補と同じよく使う語の意味の最初の文を `tools/make-meanings.mjs` で取り出して作りました (長い文は途中で切っています)。
+変換中に候補で止まったとき、その候補の日本語の意味を出すのに使います。[ウィクショナリー日本語版](https://ja.wiktionary.org/) の記事から [kaikki.org](https://kaikki.org/jawiktionary/) (wiktextract、Tatu Ylonen) が取り出したデータを元に、英訳の候補と同じよく使う語の意味の最初の文を `tools/make-meanings.mjs` で取り出して作りました (200 文字を超える文は途中で切っています)。
 
 - 著作権: ウィクショナリーの執筆者 (各記事の履歴を参照)
 - ライセンス: [Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0)](https://creativecommons.org/licenses/by-sa/4.0/)

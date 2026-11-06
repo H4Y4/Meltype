@@ -88,7 +88,8 @@ public sealed class MeaningDictionary
             if (count == 0) continue;
             Span<int> senses = stackalloc int[MaxSenses];
             var word = _lines.Key(first).ToString();
-            return new MeaningEntry(word, HeadwordReading(text, length, word, reading), Format(senses[..Choose(first, count, reading, senses)]));
+            var chosen = senses[..Choose(first, count, reading, senses)];
+            return new MeaningEntry(word, HeadwordReading(text, length, word, reading), Format(chosen, ShortLength), Format(chosen, int.MaxValue));
         }
         return null;
     }
@@ -133,18 +134,33 @@ public sealed class MeaningDictionary
         return n;
     }
 
-    private string Format(ReadOnlySpan<int> senses)
+    /// <summary>短く出すとき (Windows の候補の横の枠・Lookup) の、1 つの意味の長さの上限。超えたら … で切る。</summary>
+    internal const int ShortLength = 60;
+
+    /// <summary>意味を並べる (2 つ以上なら ① ② を付ける)。1 つの意味が maxLength を超えたら … で切る。</summary>
+    private string Format(ReadOnlySpan<int> senses, int maxLength)
     {
-        if (senses.Length == 1) return _lines.Field(senses[0], 2).ToString();
+        if (senses.Length == 1) return Shorten(_lines.Field(senses[0], 2).ToString(), maxLength);
         var text = new System.Text.StringBuilder();
         for (var i = 0; i < senses.Length; i++)
         {
             if (i > 0) text.Append('\n');
-            text.Append((char)('①' + i)).Append(' ').Append(_lines.Field(senses[i], 2));
+            text.Append((char)('①' + i)).Append(' ').Append(Shorten(_lines.Field(senses[i], 2).ToString(), maxLength));
         }
         return text.ToString();
+    }
+
+    /// <summary>text が maxLength 文字を超えたら、maxLength - 1 文字 + … にする (サロゲートペアの途中では切らない)。</summary>
+    internal static string Shorten(string text, int maxLength)
+    {
+        if (text.Length <= maxLength) return text;
+        var cut = maxLength - 1;
+        if (char.IsHighSurrogate(text[cut - 1])) cut--;
+        return text[..cut] + "…";
     }
 }
 
 /// <summary>候補の意味: 見出し語 (橋)・その読み (はし。分からなければ null)・意味の本文。</summary>
-public sealed record MeaningEntry(string Word, string? Reading, string Meaning);
+/// <param name="Meaning">短い意味 (1 つの意味を <see cref="MeaningDictionary.ShortLength"/> 文字まで)。Windows の候補の横の枠に出す。</param>
+/// <param name="Full">切らない意味 (Mac 版の辞書のパネルに出す)。</param>
+public sealed record MeaningEntry(string Word, string? Reading, string Meaning, string Full);

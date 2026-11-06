@@ -116,6 +116,8 @@ struct CompositionView: Decodable {
     let meaningWord: String?
     let meaningReading: String?
     let meaningSource: String?
+    /// 切らない意味 (本体の meaning は 1 つの意味を 60 文字までに切ってある)。古い本体からは来ない。
+    let meaningFull: String?
     let suggestion: String?
 }
 

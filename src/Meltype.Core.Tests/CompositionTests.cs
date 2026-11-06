@@ -4052,6 +4052,12 @@ internal static class CompositionTests
             Assert.Equal(headReading, entry?.Reading, text + " の読み");
             Assert.Equal(meanings.Lookup(text, reading), entry?.Meaning, text + " の意味は Lookup と同じ");
         }
+        // 辞書は意味を 200 文字まで持つ。Windows の枠と Lookup は今までどおり 1 つの意味を 60 文字まで、Mac のパネルは切らない
+        var bridge = meanings.LookupEntry("橋", "はし")!;
+        Assert.True(bridge.Full.EndsWith("状態にあるもの。", StringComparison.Ordinal), "切らない意味: " + bridge.Full);
+        Assert.True(bridge.Meaning.Length == MeaningDictionary.ShortLength && bridge.Meaning.EndsWith('…'), "短い意味は 60 文字で切る: " + bridge.Meaning);
+        Assert.Equal(bridge.Meaning, meanings.Lookup("橋", "はし"));
+        Assert.Equal("😀😀…", MeaningDictionary.Shorten("😀😀😀😀", 6), "サロゲートペアの途中では切らない");
         Assert.Equal(null, MeaningDictionary.HeadwordReading("橋を", 1, "橋", null), "読みが分からなければ出さない");
         Assert.Equal(null, MeaningDictionary.HeadwordReading("橋を", 1, "橋", "はしが"), "後ろのかなが読みと合わなければ出さない");
         Assert.Equal(null, MeaningDictionary.HeadwordReading("メール", 3, "メール", "めーる"), "かなだけの見出しには読みを付けない");
@@ -4068,7 +4074,7 @@ internal static class CompositionTests
         Assert.True(view.MeaningWord is { Length: > 0 }, "見出し語");
         Assert.True(view.MeaningSource is "ウィクショナリー日本語版" or "JMdict", "出典: " + view.MeaningSource);
         var json = new SessionResult(true, [], view).ToJson();
-        Assert.True(json.Contains("\"meaningWord\":") && json.Contains("\"meaningReading\":") && json.Contains("\"meaningSource\":"), json);
+        Assert.True(json.Contains("\"meaningWord\":") && json.Contains("\"meaningReading\":") && json.Contains("\"meaningSource\":") && json.Contains("\"meaningFull\":"), json);
     }
 
     [Test]

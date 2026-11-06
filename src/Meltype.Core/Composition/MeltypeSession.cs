@@ -85,8 +85,8 @@ public sealed record SessionResult(bool Consumed, IReadOnlyList<TextEdit> Commit
         builder.Append(",\"meaning\":");
         if (view.Meaning is { } meaning) AppendString(builder, meaning);
         else builder.Append("null");
-        // 意味の見出し語・読み・出典 (Mac 版のパネルの見出し「はし【橋】」と出典に使う。無ければ null)
-        foreach (var (name, value) in new[] { ("meaningWord", view.MeaningWord), ("meaningReading", view.MeaningReading), ("meaningSource", view.MeaningSource) })
+        // 意味の見出し語・読み・出典・切らない意味 (Mac 版の辞書のパネルの見出し「はし【橋】」と本文・出典に使う。無ければ null)
+        foreach (var (name, value) in new[] { ("meaningWord", view.MeaningWord), ("meaningReading", view.MeaningReading), ("meaningSource", view.MeaningSource), ("meaningFull", view.MeaningFull) })
         {
             builder.Append(",\"").Append(name).Append("\":");
             if (value is not null) AppendString(builder, value);

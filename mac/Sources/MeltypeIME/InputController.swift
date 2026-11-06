@@ -614,7 +614,7 @@ final class MeltypeInputController: IMKInputController, ModeServiceTarget {
     /// 選んでいる候補の意味を、候補の一覧の横のパネルにすぐ出す (macOS 標準の日本語入力と同じ。Windows 版は 1.5 秒止まったとき)。
     /// 候補の一覧は作り直すと位置が変わり、新しい位置はこの周回の後で決まるので、次の周回で位置を読んでから出す。
     private func showMeaning(_ view: CompositionView, client: IMKTextInput) {
-        guard let meaning = view.meaning, !meaning.isEmpty else {
+        guard let meaning = view.meaningFull ?? view.meaning, !meaning.isEmpty else {
             hideMeaning()
             return
         }

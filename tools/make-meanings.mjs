@@ -20,9 +20,11 @@ for (const line of fs.readFileSync(translations, 'utf8').split('\n')) {
   wanted.add(line.split('\t')[0]);
 }
 
-const MaxSenses = 3, MaxLength = 60;
+// 最初の文は 200 文字まで (それより長い文だけ切る)。60 文字で切ると、橋 の「…又はそのような状態にある…」のように
+// 途中で切れた意味が多かった。短く出す所 (Windows の候補の横の枠) は、本体 (MeaningDictionary) が 60 文字にする
+const MaxSenses = 3, MaxLength = 200;
 
-// 意味の文を短くする: 最初の文 (。まで) だけ、長ければ切る。(サ変) などの文法の印は外す。
+// 意味の文を短くする: 最初の文 (。まで) だけ、MaxLength より長ければ切る。(サ変) などの文法の印は外す。
 function clean(gloss) {
   let g = gloss.replace(/\s+/g, ' ').trim();
   let reading = '';

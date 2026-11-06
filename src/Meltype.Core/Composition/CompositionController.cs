@@ -40,7 +40,8 @@ public sealed record CompositionView(
     string? ContextHint = null,
     string? MeaningWord = null,
     string? MeaningReading = null,
-    string? MeaningSource = null);
+    string? MeaningSource = null,
+    string? MeaningFull = null);
 
 /// <summary>CompositionController が外界とやり取りする口。テストでは偽物に差し替える。</summary>
 public interface ICompositionHost
@@ -3012,7 +3013,7 @@ public sealed class CompositionController
         if (_options.Meanings?.LookupEntry(clause.Text, clause.IsEnglish ? null : clause.Reading) is { } entry) return (entry, "ウィクショナリー日本語版");
         if (_options.Translations?.Meaning(clause.Text) is not { } english) return null;
         var reading = !clause.IsEnglish && clause.Text.Any(KanaChars.IsKanji) ? clause.Reading : null;
-        return (new MeaningEntry(clause.Text, reading, english), "JMdict");
+        return (new MeaningEntry(clause.Text, reading, english, english), "JMdict");
     }
 
     /// <summary>
@@ -3781,7 +3782,7 @@ public sealed class CompositionController
                 MisspellingSuggestion(),
                 Typed: TypedKeys(),
                 Committed: string.Concat(_clauses.Select(c => c.Text)), ContextHint: zenzai ? "Zenzai" : null,
-                MeaningWord: meaning?.Entry.Word, MeaningReading: meaning?.Entry.Reading, MeaningSource: meaning?.Source));
+                MeaningWord: meaning?.Entry.Word, MeaningReading: meaning?.Entry.Reading, MeaningSource: meaning?.Source, MeaningFull: meaning?.Entry.Full));
         }
         else
         {
