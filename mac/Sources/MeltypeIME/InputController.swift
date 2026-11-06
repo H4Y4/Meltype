@@ -622,10 +622,23 @@ final class MeltypeInputController: IMKInputController, ModeServiceTarget {
         meaningKey = key
         let level = panelLevel(Self.defaultCandidatesLevel, above: client)
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.meaningKey == key, let window = candidatesWindow, window.isVisible(),
-                  let frame = Self.candidatesFrame(window) else { return }
+            guard let self, self.meaningKey == key, let window = candidatesWindow, window.isVisible() else { return }
+            guard let frame = Self.candidatesFrame(window, caret: self.markedCaret(client)) else {
+                MeaningPanel.shared.hide()
+                return
+            }
             MeaningPanel.shared.show(meaning, beside: frame, level: level)
         }
+    }
+
+    /// 変換中の文字の先頭の、入力欄の行の枠 (画面の座標)。取れなければ nil。
+    private func markedCaret(_ client: IMKTextInput) -> NSRect? {
+        let marked = client.markedRange()
+        let index = marked.location != NSNotFound ? marked.location : client.selectedRange().location
+        guard index != NSNotFound else { return nil }
+        var rect = NSRect.zero
+        _ = client.attributes(forCharacterIndex: index, lineHeightRectangle: &rect)
+        return rect.minX.isFinite && rect.minY.isFinite && rect.height > 0 ? rect : nil
     }
 
     private func hideMeaning() {
@@ -633,11 +646,21 @@ final class MeltypeInputController: IMKInputController, ModeServiceTarget {
         MeaningPanel.shared.hide()
     }
 
-    /// 候補の一覧の枠 (画面の座標)。IMKCandidates が返さないときは、このプロセスにある見えている IMK のウィンドウ (IMKUIPanel) の枠。
-    private static func candidatesFrame(_ window: IMKCandidates) -> NSRect? {
-        let frame = window.candidateFrame()
-        if frame.width > 0 && frame.height > 0 { return frame }
-        return NSApp.windows.first { $0.isVisible && String(describing: type(of: $0)).hasPrefix("IMK") }?.frame
+    /// 候補の一覧の枠 (画面の座標)。このプロセスにある見えている IMK のウィンドウ (候補の一覧は IMKUIPanel など) のうち、
+    /// 変換中の文字 (caret) に一番近いものの枠。IMKCandidates.candidateFrame() は画面の座標を返さないことがある
+    /// (それを使うと、パネルが候補の一覧から離れた左の方に出ていた) ので、IMK のウィンドウが見つからないときだけ使う。
+    private static func candidatesFrame(_ window: IMKCandidates, caret: NSRect?) -> NSRect? {
+        let reported = window.candidateFrame()
+        let windows = NSApp.windows.filter { $0.isVisible && $0.frame.width > 1 && $0.frame.height > 1 && String(describing: type(of: $0)).hasPrefix("IMK") }
+        func distance(_ frame: NSRect) -> CGFloat {
+            guard let caret else { return 0 }
+            let dx = frame.minX > caret.maxX ? frame.minX - caret.maxX : caret.minX > frame.maxX ? caret.minX - frame.maxX : 0
+            let dy = frame.maxY < caret.minY ? caret.minY - frame.maxY : frame.minY > caret.maxY ? frame.minY - caret.maxY : 0
+            return hypot(dx, dy)
+        }
+        if let nearest = windows.min(by: { distance($0.frame) < distance($1.frame) }) { return nearest.frame }
+        let onScreen = NSScreen.screens.contains { $0.frame.contains(reported) }
+        return reported.width > 0 && reported.height > 0 && onScreen ? reported : nil
     }
 
     private func updateCandidates(_ view: CompositionView, client: IMKTextInput) {

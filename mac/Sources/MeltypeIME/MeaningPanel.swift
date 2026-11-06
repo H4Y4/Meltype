@@ -22,6 +22,9 @@ final class MeaningPanel {
 
     var isVisible: Bool { panel?.isVisible == true }
 
+    /// 今出しているパネルの枠 (出していなければ nil)。
+    var frame: NSRect? { panel?.isVisible == true ? panel?.frame : nil }
+
     /// candidates (候補の一覧の枠、画面の座標) の右に、上端をそろえて出す。右に入らなければ左に出す。
     func show(_ meaning: String, beside candidates: NSRect, level: NSWindow.Level) {
         guard !meaning.isEmpty, candidates.width > 0, candidates.height > 0,
