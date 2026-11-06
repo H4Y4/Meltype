@@ -134,6 +134,10 @@ public sealed class RomajiTypoCorrector
                     _ => null,
                 };
                 if (onbin is not null) forms.Add(stem + onbin);
+                // 可能形 (扱える・書ける・読める)。え段 + ない・ます・た は付属語が続く形 (あつかえ + ない) で読めるが、
+                // え段 + る は る が付属語でないので 1 語にならず、日本語の道が弱くなって英語に負けていた
+                // (うまいことあつかえる が うまいこ|toa|つかえる、これあえる が korea|える)。ござる型・ある は可能形を持たない
+                if (kind is not ("v5aru" or "v5r-i")) forms.Add(stem + row[2] + "る");
                 // ござる・いらっしゃる・なさる は ます の前が い (ございます)
                 if (kind == "v5aru") forms.Add(stem + "い");
                 break;

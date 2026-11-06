@@ -949,6 +949,33 @@ internal static class LanguageLearningTests
     }
 
     [Test]
+    public static void PotentialVerbForm_IsJapanese_EvenNextToALearnedWord()
+    {
+        // 報告: toa を英字で覚えていたら、うまいことあつかえる が うまいこ|toa|つかえる になった。
+        // 可能形 (扱える) が日本語の語にならず (え段 + る の る が付属語でない)、日本語の道が弱かった。これあえる も korea|える になっていた
+        var memory = new LanguageMemory(null);
+        memory.Remember("toa", english: true, explicitChoice: true);
+        CompositionTests.Detector.Memory = memory;
+        try
+        {
+            foreach (var (typed, expected) in new[]
+            {
+                ("umaikotoatukaeru\n", "うまいことあつかえる"), ("umaikotoatsukaeru\n", "うまいことあつかえる"),
+                ("koreaeru\n", "これあえる"), ("sorehaatukaeruyo\n", "それはあつかえるよ"), ("toa\n", "toa"),
+            })
+            {
+                var k = new CompositionTests.Keyboard(languages: memory);
+                k.Type(typed);
+                Assert.Equal(expected, k.Host.Document, typed);
+            }
+        }
+        finally
+        {
+            CompositionTests.Detector.Memory = null;
+        }
+    }
+
+    [Test]
     public static void LearnedEnglishWord_ConvertShowsEngineCandidates()
     {
         // #1137: go を英字で確定したあと、go + 変換キーの候補が ご ゴ ｺﾞ go Go GO だけで、語 碁 後 が出ない。
