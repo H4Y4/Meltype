@@ -20,21 +20,60 @@ final class MeaningPanel {
 
     private init() {}
 
+    /// 出す中身。見出し (word・reading) と出典 (source) は無いこともある。
+    struct Entry {
+        var word: String?
+        var reading: String?
+        var meaning: String
+        var source: String?
+    }
+
+    /// 国語辞典と同じ書き方の見出し (はし【橋】)。読みが無ければ語だけ (メール)、語も無ければ nil。
+    static func title(word: String?, reading: String?) -> String? {
+        guard let word, !word.isEmpty else { return nil }
+        guard let reading, !reading.isEmpty, reading != word else { return word }
+        return "\(reading)【\(word)】"
+    }
+
+    /// パネルの文: 太字の見出し、意味 (① ② …)、小さく出典。
+    static func text(_ entry: Entry) -> NSAttributedString {
+        let text = NSMutableAttributedString()
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.paragraphSpacing = 6
+        paragraph.lineBreakMode = .byWordWrapping
+        if let title = title(word: entry.word, reading: entry.reading) {
+            text.append(NSAttributedString(string: title + "\n", attributes: [
+                .font: NSFont.boldSystemFont(ofSize: fontSize + 2), .foregroundColor: NSColor.labelColor, .paragraphStyle: paragraph]))
+        }
+        let body = NSMutableParagraphStyle()
+        body.paragraphSpacing = 3
+        body.lineBreakMode = .byWordWrapping
+        text.append(NSAttributedString(string: entry.meaning, attributes: [
+            .font: NSFont.systemFont(ofSize: fontSize), .foregroundColor: NSColor.labelColor, .paragraphStyle: body]))
+        if let source = entry.source, !source.isEmpty {
+            let caption = NSMutableParagraphStyle()
+            caption.paragraphSpacingBefore = 6
+            text.append(NSAttributedString(string: "\n" + source, attributes: [
+                .font: NSFont.systemFont(ofSize: fontSize - 2), .foregroundColor: NSColor.secondaryLabelColor, .paragraphStyle: caption]))
+        }
+        return text
+    }
+
     var isVisible: Bool { panel?.isVisible == true }
 
     /// 今出しているパネルの枠 (出していなければ nil)。
     var frame: NSRect? { panel?.isVisible == true ? panel?.frame : nil }
 
     /// candidates (候補の一覧の枠、画面の座標) の右に、上端をそろえて出す。右に入らなければ左に出す。
-    func show(_ meaning: String, beside candidates: NSRect, level: NSWindow.Level) {
-        guard !meaning.isEmpty, candidates.width > 0, candidates.height > 0,
+    func show(_ entry: Entry, beside candidates: NSRect, level: NSWindow.Level) {
+        guard !entry.meaning.isEmpty, candidates.width > 0, candidates.height > 0,
               let screen = NSScreen.screens.first(where: { $0.frame.intersects(candidates) }) ?? NSScreen.main else {
             hide()
             return
         }
         let visible = screen.visibleFrame
         let (panel, label) = makePanel()
-        label.stringValue = meaning
+        label.attributedStringValue = Self.text(entry)
         // 文の高さに合わせる。候補の一覧より低ければ、候補の一覧と同じ高さにする (純正の辞書の表示と同じ並び)
         let textWidth = Self.width - Self.padding * 2
         let textHeight = ceil(label.cell?.cellSize(forBounds: NSRect(x: 0, y: 0, width: textWidth, height: .greatestFiniteMagnitude)).height ?? 0)
@@ -47,7 +86,7 @@ final class MeaningPanel {
                              width: textWidth, height: min(textHeight, height - Self.padding * 2))
         panel.level = level
         panel.setFrame(NSRect(x: x, y: y, width: Self.width, height: height), display: true)
-        panel.contentView?.setAccessibilityLabel(meaning)
+        panel.contentView?.setAccessibilityLabel(label.attributedStringValue.string)
         panel.orderFrontRegardless()
     }
 

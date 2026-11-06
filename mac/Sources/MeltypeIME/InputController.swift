@@ -618,7 +618,7 @@ final class MeltypeInputController: IMKInputController, ModeServiceTarget {
             hideMeaning()
             return
         }
-        let key = "\(view.selectedIndex):\(meaning)"
+        let key = "\(view.selectedIndex):\(view.meaningWord ?? ""):\(meaning)"
         meaningKey = key
         let level = panelLevel(Self.defaultCandidatesLevel, above: client)
         DispatchQueue.main.async { [weak self] in
@@ -627,7 +627,8 @@ final class MeltypeInputController: IMKInputController, ModeServiceTarget {
                 MeaningPanel.shared.hide()
                 return
             }
-            MeaningPanel.shared.show(meaning, beside: frame, level: level)
+            MeaningPanel.shared.show(MeaningPanel.Entry(word: view.meaningWord, reading: view.meaningReading, meaning: meaning, source: view.meaningSource),
+                                     beside: frame, level: level)
         }
     }
 

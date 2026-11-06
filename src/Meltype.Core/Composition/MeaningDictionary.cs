@@ -65,7 +65,13 @@ public sealed class MeaningDictionary
     /// 候補 (text) の意味。reading はその文節の読み (橋 を はし と読んだのか きょう と読んだのかで意味を選ぶ)。
     /// 候補の先頭から一番長く一致する語を引き、残りはひらがな (助詞・送り仮名) だけのときに返す。無ければ null。
     /// </summary>
-    public string? Lookup(string text, string? reading)
+    public string? Lookup(string text, string? reading) => LookupEntry(text, reading)?.Meaning;
+
+    /// <summary>
+    /// <see cref="Lookup"/> と同じに引き、見出し語 (橋を → 橋、持って → 持つ) とその読み (分かれば) も返す。読みは
+    /// 文節の読みから後ろのかな (助詞・送り仮名) を外して作る (はしを → はし、もって → もつ)。かなだけの見出し・読めないときは null。
+    /// </summary>
+    public MeaningEntry? LookupEntry(string text, string? reading)
     {
         var minLength = text.Length;
         while (minLength > 0 && !KanaChars.IsKanjiOrKatakana(text[minLength - 1])) minLength--;
@@ -81,9 +87,25 @@ public sealed class MeaningDictionary
             }
             if (count == 0) continue;
             Span<int> senses = stackalloc int[MaxSenses];
-            return Format(senses[..Choose(first, count, reading, senses)]);
+            var word = _lines.Key(first).ToString();
+            return new MeaningEntry(word, HeadwordReading(text, length, word, reading), Format(senses[..Choose(first, count, reading, senses)]));
         }
         return null;
+    }
+
+    /// <summary>
+    /// 見出し語 word の読み。text の先頭 matched 文字で引いた (残りはひらがな)。文節の読み reading から残りのかなを外し、
+    /// 語幹で引いたとき (持って の 持 → 持つ) は見出しの語幹より後ろ (つ) を足す。かなだけの見出し・合わないときは null。
+    /// </summary>
+    internal static string? HeadwordReading(string text, int matched, string word, string? reading)
+    {
+        if (reading is null || !HasKanji(word)) return null;
+        var rest = text[matched..];
+        if (!rest.All(KanaChars.IsHiragana) || !reading.EndsWith(rest, StringComparison.Ordinal)) return null;
+        var head = reading[..^rest.Length];
+        var tail = word.Length > matched && word.StartsWith(text[..matched], StringComparison.Ordinal) ? word[matched..] : "";
+        if (head.Length == 0 || !head.All(KanaChars.IsHiraganaOrLongMark) || !tail.All(KanaChars.IsHiragana)) return null;
+        return head + tail;
     }
 
     /// <summary>
@@ -123,3 +145,6 @@ public sealed class MeaningDictionary
         return text.ToString();
     }
 }
+
+/// <summary>候補の意味: 見出し語 (橋)・その読み (はし。分からなければ null)・意味の本文。</summary>
+public sealed record MeaningEntry(string Word, string? Reading, string Meaning);

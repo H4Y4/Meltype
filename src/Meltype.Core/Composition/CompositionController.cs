@@ -37,7 +37,10 @@ public sealed record CompositionView(
     int SelectedPrediction = -1,
     string? Typed = null,
     string? Committed = null,
-    string? ContextHint = null);
+    string? ContextHint = null,
+    string? MeaningWord = null,
+    string? MeaningReading = null,
+    string? MeaningSource = null);
 
 /// <summary>CompositionController が外界とやり取りする口。テストでは偽物に差し替える。</summary>
 public interface ICompositionHost
@@ -3000,8 +3003,17 @@ public sealed class CompositionController
     }
 
     /// <summary>選んでいる候補の意味: 日本語の意味 (ウィクショナリー)、無ければ英訳 (JMdict)。</summary>
-    private string? CandidateMeaning(Clause clause) =>
-        _options.Meanings?.Lookup(clause.Text, clause.IsEnglish ? null : clause.Reading) ?? _options.Translations?.Meaning(clause.Text);
+    /// <summary>
+    /// 候補の意味と、その見出し語・読み・出典 (辞書の見出しを出す Mac 版のパネル用)。ウィクショナリー日本語版に無い語は JMdict の英訳
+    /// (見出しは候補のまま、読みは文節の読み)。
+    /// </summary>
+    private (MeaningEntry Entry, string Source)? CandidateMeaningEntry(Clause clause)
+    {
+        if (_options.Meanings?.LookupEntry(clause.Text, clause.IsEnglish ? null : clause.Reading) is { } entry) return (entry, "ウィクショナリー日本語版");
+        if (_options.Translations?.Meaning(clause.Text) is not { } english) return null;
+        var reading = !clause.IsEnglish && clause.Text.Any(KanaChars.IsKanji) ? clause.Reading : null;
+        return (new MeaningEntry(clause.Text, reading, english), "JMdict");
+    }
 
     /// <summary>
     /// 候補の右に小さく出す注記: 英訳 (complex)、半角 / 全角 (同じ記号・英数字の半角と全角が両方候補にあるとき。# と ＃ は見分けにくい)。
@@ -3755,6 +3767,7 @@ public sealed class CompositionController
             if (!selected.Expanded) Expand(selected);
             // 出している文節に Zenzai の答えがあれば、説明の頭に「Zenzai」と出す (学習・選び直しで変わった文節は数えない。issue #1152)
             var zenzai = _clauses.Any(c => c.ZenzaiText is { } z && c.Text == z);
+            var meaning = _options.CandidateMeanings() ? CandidateMeaningEntry(selected) : null;
             _host.Show(new CompositionView(
                 string.Concat(_clauses.Select(c => c.Text)),
                 selected.Candidates,
@@ -3764,10 +3777,11 @@ public sealed class CompositionController
                 _clauses.Select(c => c.Text).ToList(),
                 _selectedClause,
                 CandidateNotes(selected),
-                _options.CandidateMeanings() ? CandidateMeaning(selected) : null,
+                meaning?.Entry.Meaning,
                 MisspellingSuggestion(),
                 Typed: TypedKeys(),
-                Committed: string.Concat(_clauses.Select(c => c.Text)), ContextHint: zenzai ? "Zenzai" : null));
+                Committed: string.Concat(_clauses.Select(c => c.Text)), ContextHint: zenzai ? "Zenzai" : null,
+                MeaningWord: meaning?.Entry.Word, MeaningReading: meaning?.Entry.Reading, MeaningSource: meaning?.Source));
         }
         else
         {

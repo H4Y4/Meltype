@@ -112,6 +112,10 @@ struct CompositionView: Decodable {
     let clauses: [String]
     /// 選んでいる候補の意味 (無ければ nil)。候補で少し止まったら注釈に出す。
     let meaning: String?
+    /// 意味の見出し語 (橋)・読み (はし)・出典 (ウィクショナリー日本語版 / JMdict)。古い本体からは来ないので nil のことがある。
+    let meaningWord: String?
+    let meaningReading: String?
+    let meaningSource: String?
     let suggestion: String?
 }
 

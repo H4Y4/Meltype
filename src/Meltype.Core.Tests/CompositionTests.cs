@@ -4037,6 +4037,41 @@ internal static class CompositionTests
     }
 
     [Test]
+    public static void CandidateMeaning_Headword()
+    {
+        // 辞書の見出し (Mac 版のパネルの はし【橋】): 見出し語と、文節の読みから後ろのかなを外した読み
+        var meanings = MeaningDictionary.Load();
+        foreach (var (text, reading, word, headReading) in new[]
+        {
+            ("箸を", "はしを", "箸", "はし"), ("橋", "きょう", "橋", "きょう"), ("持って", "もって", "持つ", "もつ"),
+            ("美しかった", "うつくしかった", "美しい", "うつくしい"),
+        })
+        {
+            var entry = meanings.LookupEntry(text, reading);
+            Assert.Equal(word, entry?.Word, text);
+            Assert.Equal(headReading, entry?.Reading, text + " の読み");
+            Assert.Equal(meanings.Lookup(text, reading), entry?.Meaning, text + " の意味は Lookup と同じ");
+        }
+        Assert.Equal(null, MeaningDictionary.HeadwordReading("橋を", 1, "橋", null), "読みが分からなければ出さない");
+        Assert.Equal(null, MeaningDictionary.HeadwordReading("橋を", 1, "橋", "はしが"), "後ろのかなが読みと合わなければ出さない");
+        Assert.Equal(null, MeaningDictionary.HeadwordReading("メール", 3, "メール", "めーる"), "かなだけの見出しには読みを付けない");
+    }
+
+    [Test]
+    public static void CandidateMeaning_ViewHasHeadwordAndSource()
+    {
+        // 変換中の表示 (Mac 版に渡す JSON) に、意味の見出し語・読み・出典が入る
+        var k = new Keyboard(converter: new FakeConverter(), moreCandidates: r => r == "はし" ? ["橋", "箸"] : []);
+        k.Type("hasi ");
+        var view = k.Host.View!;
+        if (view.Meaning is null) return;
+        Assert.True(view.MeaningWord is { Length: > 0 }, "見出し語");
+        Assert.True(view.MeaningSource is "ウィクショナリー日本語版" or "JMdict", "出典: " + view.MeaningSource);
+        var json = new SessionResult(true, [], view).ToJson();
+        Assert.True(json.Contains("\"meaningWord\":") && json.Contains("\"meaningReading\":") && json.Contains("\"meaningSource\":"), json);
+    }
+
+    [Test]
     public static void LaterLongerEnglishWord_WinsOverShorterOne()
     {
         // motteschoolhe が mottes (英単語) + ちょおl + へ になっていた。持って + school + へ。
